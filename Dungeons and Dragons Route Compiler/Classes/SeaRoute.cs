@@ -21,28 +21,29 @@ namespace YourFantasyWorldProject.Classes
         public string ToFileString()
         {
             // Destination Name and Region will now retain their original casing from the Settlement object.
-            return $"\t{Destination.Name}\t{Destination.Region}\t{Distance}km";
+            // NO LONGER adding a leading tab here.
+            return $"{Destination.Name}\t{Destination.Region}\t{Distance}km";
         }
 
         /// <summary>
         /// Parses a string line from a sea route file into a SeaRoute object.
-        /// Assumes the line is formatted as: \tDestinationName\tDestinationRegion\tDistancekm
+        /// Assumes the line is formatted as: DestinationName\tDestinationRegion\tDistancekm
         /// </summary>
         /// <param name="origin">The origin settlement, which is typically read from a preceding line in the file.</param>
         /// <param name="line">The tab-separated line representing the route segment.</param>
         /// <returns>A new SeaRoute object.</returns>
         public static SeaRoute ParseFromFileLine(Settlement origin, string line)
         {
+            // Trim leading/trailing whitespace, but do NOT assume a leading tab.
             var parts = line.Trim().Split('\t');
-            if (parts.Length != 4)
+            if (parts.Length != 3) // Now expect 3 parts (DestinationName, DestinationRegion, Distancekm)
             {
-                throw new FormatException($"Invalid sea route line format. Expected 4 parts, got {parts.Length}: {line}");
+                throw new FormatException($"Invalid sea route line format. Expected 3 parts, got {parts.Length}: {line}");
             }
 
-            // The first part is empty due to leading tab, so parts[1] is Destination.Name
-            string destName = parts[1].Trim();
-            string destRegion = parts[2].Trim();
-            double distance = double.Parse(parts[3].Replace("km", "").Trim());
+            string destName = parts[0].Trim(); // Now at index 0
+            string destRegion = parts[1].Trim(); // Now at index 1
+            double distance = double.Parse(parts[2].Replace("km", "").Trim()); // Now at index 2
 
             Settlement destination = new Settlement(destName, destRegion);
 

@@ -229,31 +229,27 @@ namespace YourFantasyWorldProject.Managers
 
                 foreach (string line in lines)
                 {
+                    // Trim any leading/trailing whitespace from the entire line for checking
                     string trimmedLine = line.Trim();
+
                     if (string.IsNullOrWhiteSpace(trimmedLine))
                     {
                         continue;
                     }
 
-                    if (!trimmedLine.StartsWith("\t")) // This is an origin settlement line
+                    // DETERMINE LINE TYPE:
+                    // An origin line does NOT contain a tab character (it's just the settlement name)
+                    // A route line DOES contain tab characters (it's tab-separated data)
+                    if (!trimmedLine.Contains('\t')) // This is an origin settlement line (e.g., "Tinverke")
                     {
-                        string[] originParts = trimmedLine.Split('\t');
-                        string originName = originParts[0].Trim();
-                        // Infer region from filename if not explicitly provided in the line or if provided region mismatches
+                        string originName = trimmedLine; // The whole trimmed line is the origin name
+                        // Infer region from filename
                         string regionFromFileName = Path.GetFileNameWithoutExtension(filePath); // Filename is already uppercase
-                        string effectiveRegion = regionFromFileName; // Default to filename region
+                        string effectiveRegion = regionFromFileName;
 
-                        if (originParts.Length > 1) // If region is provided in the line itself
-                        {
-                            string providedRegion = originParts[1].Trim();
-                            if (!string.Equals(providedRegion, regionFromFileName, StringComparison.OrdinalIgnoreCase))
-                            {
-                                Console.WriteLine($"Warning: Line '{line}' in file '{Path.GetFileName(filePath)}' has region '{providedRegion}' which differs from filename region '{regionFromFileName}'. Using '{regionFromFileName}'.");
-                            }
-                        }
                         currentOrigin = GetSettlementByNameAndRegion(originName, effectiveRegion);
                     }
-                    else // This is a route line from the currentOrigin
+                    else // This is a route line from the currentOrigin (e.g., "Noswestle\tKingdom of Faalskarth...")
                     {
                         if (currentOrigin == null)
                         {
@@ -262,6 +258,8 @@ namespace YourFantasyWorldProject.Managers
                         }
                         try
                         {
+                            // Pass the original line to the ParseFromFileLine methods,
+                            // as they are now designed to handle lines without a leading tab.
                             if (routeType == RouteType.Land && typeof(T) == typeof(LandRoute))
                             {
                                 routes.Add((T)(object)LandRoute.ParseFromFileLine(currentOrigin, line));
@@ -381,27 +379,18 @@ namespace YourFantasyWorldProject.Managers
 
             // Check if the origin settlement already exists as a header in the file
             // Compare using the invariant uppercase name for lookup
-            string originHeaderContent = $"{route.Origin.Name}"; // Start with just the name
-            // No longer adding region to origin header in file, as it's inferred from filename
-            // if (!string.IsNullOrWhiteSpace(route.Origin.Region))
-            // {
-            //     originHeaderContent += $"\t{route.Origin.Region}";
-            // }
+            string originHeaderContent = route.Origin.Name; // Origin line now contains only the name
 
             int originIndex = -1;
             for (int i = 0; i < fileContent.Count; i++)
             {
                 string fileLineTrimmed = fileContent[i].Trim();
-                // An origin header does NOT start with a tab
-                if (!fileLineTrimmed.StartsWith("\t") && !string.IsNullOrWhiteSpace(fileLineTrimmed))
+                // An origin header does NOT contain a tab
+                if (!string.IsNullOrWhiteSpace(fileLineTrimmed) && !fileLineTrimmed.Contains('\t'))
                 {
-                    string[] parts = fileLineTrimmed.Split('\t', StringSplitOptions.RemoveEmptyEntries);
-                    // Check if name matches (case-insensitive)
-                    if (parts.Length >= 1 && parts[0].Trim().ToUpperInvariant().Equals(route.Origin.Name.ToUpperInvariant()))
+                    // If the trimmed line (which should be just the settlement name) matches the origin name
+                    if (fileLineTrimmed.Equals(originHeaderContent.Trim(), StringComparison.OrdinalIgnoreCase))
                     {
-                        // The origin header in the file should now *only* contain the name if we follow the new format
-                        // Or at most, the name and *its* region, but we are moving away from that.
-                        // For finding an existing header, just compare the name part.
                         originIndex = i;
                         originFound = true;
                         break;
@@ -425,16 +414,16 @@ namespace YourFantasyWorldProject.Managers
             // Iterate from originIndex + 1 to find existing routes from this origin
             for (int i = originIndex + 1; i < fileContent.Count; i++)
             {
-                // Routes always start with a tab
-                if (fileContent[i].TrimStart().StartsWith("\t") && fileContent[i].Trim().Equals(newRouteLine.Trim(), StringComparison.OrdinalIgnoreCase))
+                // Stop if we hit another origin header (a line that does not contain a tab)
+                if (!fileContent[i].Trim().Contains('\t') && !string.IsNullOrWhiteSpace(fileContent[i].Trim()))
+                {
+                    break;
+                }
+                // Check if the route already exists (case-insensitive and trimmed)
+                if (fileContent[i].Trim().Equals(newRouteLine.Trim(), StringComparison.OrdinalIgnoreCase))
                 {
                     routeExists = true;
                     Console.WriteLine("Route already exists in the file. Skipping save.");
-                    break;
-                }
-                // Stop if we hit another origin header (a line that doesn't start with a tab)
-                if (!fileContent[i].TrimStart().StartsWith("\t") && !string.IsNullOrWhiteSpace(fileContent[i].Trim()))
-                {
                     break;
                 }
             }
@@ -444,13 +433,16 @@ namespace YourFantasyWorldProject.Managers
                 // Find the correct insertion point for the new route
                 // It should be after the origin header, and before the next origin header (if any)
                 int insertionPoint = originIndex + 1;
-                while (insertionPoint < fileContent.Count && fileContent[insertionPoint].TrimStart().StartsWith("\t"))
+                while (insertionPoint < fileContent.Count && fileContent[insertionPoint].Trim().Contains('\t'))
                 {
                     insertionPoint++;
                 }
                 fileContent.Insert(insertionPoint, newRouteLine);
                 File.WriteAllLines(filePath, fileContent);
                 Console.WriteLine($"Route saved to {Path.GetFileName(filePath)} in the {(isCustom ? "custom" : "default")} folder.");
+
+                // After successfully saving a route, create/update the WorldData.zip
+                CreateWorldDataZip();
             }
         }
 
@@ -550,49 +542,36 @@ namespace YourFantasyWorldProject.Managers
                 for (int lineNumber = 0; lineNumber < lines.Length; lineNumber++)
                 {
                     string originalLine = lines[lineNumber];
-                    string trimmedLine = originalLine.Trim();
+                    string trimmedLine = originalLine.Trim(); // Trimmed version for checking content
+
                     bool lineRepaired = false;
 
                     if (string.IsNullOrWhiteSpace(trimmedLine))
                     {
-                        repairedLines.Add(originalLine);
+                        repairedLines.Add(originalLine); // Keep original whitespace for blank lines
                         continue;
                     }
 
-                    if (!trimmedLine.StartsWith("\t")) // This is an origin settlement header
+                    // DETERMINE LINE TYPE:
+                    // An origin line does NOT contain a tab character (it's just the settlement name)
+                    // A route line DOES contain tab characters (it's tab-separated data)
+                    if (!trimmedLine.Contains('\t')) // This is an origin settlement header (e.g., "Tinverke")
                     {
-                        string[] originParts = trimmedLine.Split('\t', StringSplitOptions.RemoveEmptyEntries);
-                        if (originParts.Length == 0 || originParts.Length > 2) // Max 2 parts (Name, Region)
-                        {
-                            issuesFound.Add($"Line {lineNumber + 1}: Malformed origin header '{originalLine}'. Skipping.");
-                            lineRepaired = true;
-                            continue;
-                        }
-                        string originName = textInfo.ToTitleCase(originParts[0].Trim().ToLower()); // Convert to Title Case for storing
+                        string originName = textInfo.ToTitleCase(trimmedLine.ToLower()); // The whole trimmed line is the origin name, convert to Title Case
 
                         // Always infer region from filename for validation/repair consistency
                         string regionFromFileName = Path.GetFileNameWithoutExtension(filePath);
                         string originRegion = regionFromFileName; // Use filename region
 
-                        // If the original line had a region and it doesn't match the filename, log a warning
-                        if (originParts.Length == 2 && !string.Equals(originParts[1].Trim(), regionFromFileName, StringComparison.OrdinalIgnoreCase))
-                        {
-                            string providedRegion = originParts[1].Trim();
-                            Console.WriteLine($"Warning: Line '{originalLine}' in file '{Path.GetFileName(filePath)}' has region '{providedRegion}' which differs from filename region '{regionFromFileName}'. Using '{regionFromFileName}'.");
-                            issuesFound.Add($"Line {lineNumber + 1}: Region '{providedRegion}' in origin header differs from filename region '{regionFromFileName}'. Auto-correcting to filename region.");
-                            lineRepaired = true;
-                        }
-
                         currentOrigin = new Settlement(originName, originRegion);
 
-                        // Reconstruct header with just the origin name for future compatibility
-                        // This makes the file format cleaner.
+                        // Reconstruct header with just the origin name (Title Case)
                         string repairedOriginLine = originName;
-                        repairedLines.Add(repairedOriginLine); // Now only name is stored in header
+                        repairedLines.Add(repairedOriginLine);
                         if (lineRepaired || !originalLine.Equals(repairedOriginLine)) fileChanged = true;
 
                     }
-                    else // This is a route definition line (starts with tab)
+                    else // This is a route definition line (e.g., "Noswestle\tKingdom of Faalskarth...")
                     {
                         if (currentOrigin == null)
                         {
@@ -601,50 +580,53 @@ namespace YourFantasyWorldProject.Managers
                             continue;
                         }
 
+                        // Use the trimmedLine for splitting
+                        var parts = trimmedLine.Split('\t', StringSplitOptions.None);
+
                         if (routeType == RouteType.Land)
                         {
-                            var parts = trimmedLine.Split('\t', StringSplitOptions.None);
-                            if (parts.Length != 6)
+                            // Expected parts: DestinationName, DestinationRegion, Biomes, BiomeDistances, IsMapped
+                            if (parts.Length != 5)
                             {
-                                issuesFound.Add($"Line {lineNumber + 1}: Invalid land route format. Expected 6 tab-separated parts, got {parts.Length}. Attempting repair.");
+                                issuesFound.Add($"Line {lineNumber + 1}: Invalid land route format. Expected 5 tab-separated parts, got {parts.Length}. Attempting repair for line: '{originalLine}'.");
                                 lineRepaired = true;
                             }
 
-                            string destName = parts.Length > 1 ? textInfo.ToTitleCase(parts[1].Trim().ToLower()) : "Unknown_Destination";
-                            string destRegion = parts.Length > 2 ? textInfo.ToTitleCase(parts[2].Trim().ToLower()) : "Unknown_Region";
+                            string destName = parts.Length > 0 ? textInfo.ToTitleCase(parts[0].Trim().ToLower()) : "Unknown_Destination";
+                            string destRegion = parts.Length > 1 ? textInfo.ToTitleCase(parts[1].Trim().ToLower()) : "Unknown_Region";
                             List<string> biomes = new List<string>();
                             List<double> biomeDistances = new List<double>();
                             bool isMapped = false;
 
-                            if (parts.Length > 3 && !string.IsNullOrWhiteSpace(parts[3]))
+                            if (parts.Length > 2 && !string.IsNullOrWhiteSpace(parts[2]))
                             {
-                                biomes = parts[3].Split(',', StringSplitOptions.RemoveEmptyEntries)
+                                biomes = parts[2].Split(',', StringSplitOptions.RemoveEmptyEntries)
                                                 .Select(s => s.Trim())
                                                 .ToList();
                             }
-                            if (parts.Length > 4 && !string.IsNullOrWhiteSpace(parts[4]))
+                            if (parts.Length > 3 && !string.IsNullOrWhiteSpace(parts[3]))
                             {
-                                biomeDistances = parts[4].Split(',', StringSplitOptions.RemoveEmptyEntries)
+                                biomeDistances = parts[3].Split(',', StringSplitOptions.RemoveEmptyEntries)
                                                         .Select(s => double.TryParse(s.Replace("km", "").Trim(), out double val) && val > 0 ? val : 1.0)
                                                         .ToList();
                             }
-                            if (parts.Length > 5 && !string.IsNullOrWhiteSpace(parts[5]))
+                            if (parts.Length > 4 && !string.IsNullOrWhiteSpace(parts[4]))
                             {
-                                bool.TryParse(parts[5].Trim(), out isMapped);
+                                bool.TryParse(parts[4].Trim(), out isMapped);
                             }
 
                             if (biomes.Count != biomeDistances.Count)
                             {
-                                issuesFound.Add($"Line {lineNumber + 1}: Mismatch in biome and distance count. Repairing by truncating to smaller count.");
+                                issuesFound.Add($"Line {lineNumber + 1}: Mismatch in biome and distance count. Repairing by truncating to smaller count for line: '{originalLine}'.");
                                 lineRepaired = true;
                                 int minCount = Math.Min(biomes.Count, biomeDistances.Count);
                                 biomes = biomes.Take(minCount).ToList();
                                 biomeDistances = biomeDistances.Take(minCount).ToList();
                             }
-                            if (!biomes.Any()) { biomes.Add("Unknown"); biomeDistances.Add(1.0); lineRepaired = true; issuesFound.Add($"Line {lineNumber + 1}: No biomes found, setting to Unknown."); }
+                            if (!biomes.Any()) { biomes.Add("Unknown"); biomeDistances.Add(1.0); lineRepaired = true; issuesFound.Add($"Line {lineNumber + 1}: No biomes found, setting to Unknown for line: '{originalLine}'."); }
 
                             repairedLines.Add(
-                                $"\t{destName}" +
+                                $"{destName}" + // No leading tab
                                 $"\t{destRegion}" +
                                 $"\t{string.Join(",", biomes.Select(b => textInfo.ToTitleCase(b.ToLower())))}" +
                                 $"\t{string.Join(",", biomeDistances.Select(d => $"{d}km"))}" +
@@ -655,19 +637,19 @@ namespace YourFantasyWorldProject.Managers
                         }
                         else if (routeType == RouteType.Sea)
                         {
-                            var parts = trimmedLine.Split('\t', StringSplitOptions.None);
-                            if (parts.Length != 4)
+                            // Expected parts: DestinationName, DestinationRegion, Distancekm
+                            if (parts.Length != 3)
                             {
-                                issuesFound.Add($"Line {lineNumber + 1}: Invalid sea route format. Expected 4 tab-separated parts, got {parts.Length}. Attempting repair.");
+                                issuesFound.Add($"Line {lineNumber + 1}: Invalid sea route format. Expected 3 tab-separated parts, got {parts.Length}. Attempting repair for line: '{originalLine}'.");
                                 lineRepaired = true;
                             }
 
-                            string destName = parts.Length > 1 ? textInfo.ToTitleCase(parts[1].Trim().ToLower()) : "Unknown_Destination";
-                            string destRegion = parts.Length > 2 ? textInfo.ToTitleCase(parts[2].Trim().ToLower()) : "Unknown_Region";
-                            double distance = (parts.Length > 3 && double.TryParse(parts[3].Replace("km", "").Trim(), out double val) && val > 0) ? val : 1.0;
+                            string destName = parts.Length > 0 ? textInfo.ToTitleCase(parts[0].Trim().ToLower()) : "Unknown_Destination";
+                            string destRegion = parts.Length > 1 ? textInfo.ToTitleCase(parts[1].Trim().ToLower()) : "Unknown_Region";
+                            double distance = (parts.Length > 2 && double.TryParse(parts[2].Replace("km", "").Trim(), out double val) && val > 0) ? val : 1.0;
 
                             repairedLines.Add(
-                                $"\t{destName}" +
+                                $"{destName}" + // No leading tab
                                 $"\t{destRegion}" +
                                 $"\t{distance}km"
                             );
@@ -706,6 +688,41 @@ namespace YourFantasyWorldProject.Managers
             else
             {
                 Console.WriteLine($"File not found: {Path.GetFileName(filePath)}");
+            }
+        }
+
+        /// <summary>
+        /// Creates a .zip file of the WorldData directory at the application's root folder.
+        /// This zip file can be published to GitHub for players to download.
+        /// </summary>
+        private void CreateWorldDataZip()
+        {
+            string zipFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WorldData.zip");
+
+            try
+            {
+                // Delete existing zip file if it exists to allow overwriting
+                if (File.Exists(zipFilePath))
+                {
+                    File.Delete(zipFilePath);
+                    Console.WriteLine($"Deleted existing WorldData.zip at {zipFilePath}.");
+                }
+
+                // Ensure the source directory (WorldData) exists before zipping
+                if (Directory.Exists(_basePath))
+                {
+                    // Create the zip file from the WorldData directory
+                    ZipFile.CreateFromDirectory(_basePath, zipFilePath, CompressionLevel.Fastest, false);
+                    Console.WriteLine($"Successfully created WorldData.zip at {zipFilePath}.");
+                }
+                else
+                {
+                    Console.WriteLine($"Warning: WorldData directory ({_basePath}) not found. Cannot create WorldData.zip.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error creating WorldData.zip: {ex.Message}");
             }
         }
     }
