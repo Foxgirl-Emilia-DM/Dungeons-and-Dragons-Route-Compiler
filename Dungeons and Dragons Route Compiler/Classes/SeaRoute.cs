@@ -1,4 +1,5 @@
-﻿using System;
+﻿// SeaRoute.cs
+using System;
 
 namespace YourFantasyWorldProject.Classes
 {
@@ -18,12 +19,14 @@ namespace YourFantasyWorldProject.Classes
         // Method to format the route for writing to a .txt file
         public string ToFileString()
         {
-            return $"\t{Destination.Name}\t{Destination.Country}\t{Distance}km";
+            // MODIFIED: Changed Destination.Country to Destination.Region
+            return $"\t{Destination.Name}\t{Destination.Region}\t{Distance}km";
         }
 
         public override string ToString()
         {
-            return $"{Origin.Name} ({Origin.Country}) --(Sea)--> {Destination.Name} ({Destination.Country}) | Distance: {Distance}km";
+            // MODIFIED: Changed Origin.Country and Destination.Country to Origin.Region and Destination.Region
+            return $"{Origin.Name} ({Origin.Region}) --(Sea)--> {Destination.Name} ({Destination.Region}) | Distance: {Distance}km";
         }
     }
 }

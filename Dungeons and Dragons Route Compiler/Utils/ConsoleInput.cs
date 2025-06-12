@@ -1,4 +1,5 @@
-﻿using System;
+﻿// ConsoleInput.cs
+using System;
 using System.Linq;
 
 namespace YourFantasyWorldProject.Utils
@@ -32,6 +33,37 @@ namespace YourFantasyWorldProject.Utils
                     return value;
                 }
                 Console.WriteLine($"Invalid input. Please enter a valid number greater than or equal to {minValue}.");
+            }
+        }
+
+        // NEW METHOD: GetIntInput
+        public static int GetIntInput(string prompt, int minValue = int.MinValue, int maxValue = int.MaxValue)
+        {
+            int value;
+            while (true)
+            {
+                Console.Write(prompt);
+                string input = Console.ReadLine();
+                if (int.TryParse(input, out value) && value >= minValue && value <= maxValue)
+                {
+                    return value;
+                }
+                if (minValue == int.MinValue && maxValue == int.MaxValue)
+                {
+                    Console.WriteLine("Invalid input. Please enter a valid integer.");
+                }
+                else if (minValue != int.MinValue && maxValue != int.MaxValue)
+                {
+                    Console.WriteLine($"Invalid input. Please enter an integer between {minValue} and {maxValue}.");
+                }
+                else if (minValue != int.MinValue)
+                {
+                    Console.WriteLine($"Invalid input. Please enter an integer greater than or equal to {minValue}.");
+                }
+                else // maxValue is not int.MaxValue
+                {
+                    Console.WriteLine($"Invalid input. Please enter an integer less than or equal to {maxValue}.");
+                }
             }
         }
 

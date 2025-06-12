@@ -1,10 +1,11 @@
-﻿using System;
+﻿// LandRoute.cs
+using System;
 using System.Collections.Generic;
 using System.Linq;
 
 namespace YourFantasyWorldProject.Classes
 {
-    public class LandRoute : IRoute // MODIFIED LINE
+    public class LandRoute : IRoute
     {
         public Settlement Origin { get; set; }
         public Settlement Destination { get; set; }
@@ -31,12 +32,14 @@ namespace YourFantasyWorldProject.Classes
         {
             string biomeListStr = string.Join(", ", Biomes);
             string biomeDistanceListStr = string.Join(", ", BiomeDistances.Select(d => $"{d}km"));
-            return $"\t{Destination.Name}\t{Destination.Country}\t{biomeListStr}\t{biomeDistanceListStr}\t{IsMapped}";
+            // MODIFIED: Changed Destination.Country to Destination.Region
+            return $"\t{Destination.Name}\t{Destination.Region}\t{biomeListStr}\t{biomeDistanceListStr}\t{IsMapped}";
         }
 
         public override string ToString()
         {
-            return $"{Origin.Name} ({Origin.Country}) --(Land)--> {Destination.Name} ({Destination.Country}) | Biomes: {string.Join(", ", Biomes)} | Distances: {string.Join(", ", BiomeDistances.Select(d => $"{d}km"))} | Total: {TotalDistance}km | Mapped: {IsMapped}";
+            // MODIFIED: Changed Origin.Country and Destination.Country to Origin.Region and Destination.Region
+            return $"{Origin.Name} ({Origin.Region}) --(Land)--> {Destination.Name} ({Destination.Region}) | Biomes: {string.Join(", ", Biomes)} | Distances: {string.Join(", ", BiomeDistances.Select(d => $"{d}km"))} | Mapped: {IsMapped}";
         }
     }
 }
