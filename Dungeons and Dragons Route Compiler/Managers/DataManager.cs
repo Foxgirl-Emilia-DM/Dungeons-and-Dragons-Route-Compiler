@@ -8,22 +8,23 @@ using System.Net.Http;
 using System.Security.Cryptography; // Added for encryption
 using System.Text; // Added for Encoding
 using System.Globalization; // Added for TextInfo
+using System.IO.Compression; // ADD THIS LINE for ZipFile operations
 
 namespace YourFantasyWorldProject.Managers
 {
     public class DataManager
     {
-        private readonly string _basePath;
+        private readonly string _basePath; // WorldData directory
         private readonly string _landPath;
         private readonly string _seaPath;
-        private readonly string _customRoutesPath;
+        private readonly string _customRoutesPath; // WorldData/CustomRoutes
         private readonly string _customLandPath;
         private readonly string _customSeaPath;
 
-        // IMPORTANT: Replace this with the raw content URL of your public GitHub repository's WorldData folder
-        // This repo will now store ENCRYPTED versions of your .txt files for player downloads.
-        // Example: https://raw.githubusercontent.com/YourGitHubUser/YourRepoName/main/WorldData/
-        private const string GitHubBaseUrl = "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO_NAME/main/WorldData/";
+        // IMPORTANT: Set this URL to the *parent directory* on GitHub where WorldData.zip will reside.
+        // This is the path to your 'Dungeons and Dragons Route Compiler/' folder on GitHub,
+        // as WorldData.zip will be directly inside it.
+        private const string GitHubBaseUrl = "https://raw.githubusercontent.com/Foxgirl-Emilia-DM/Dungeons-and-Dragons-Route-Compiler/master/Dungeons%20and%20Dragons%20Route%20Compiler/";
         private static readonly HttpClient _httpClient = new HttpClient();
 
         // --- ENCRYPTION CONSTANTS (FOR PLAYER DATA) ---
@@ -43,31 +44,149 @@ namespace YourFantasyWorldProject.Managers
             _customLandPath = Path.Combine(_customRoutesPath, "Land");
             _customSeaPath = Path.Combine(_customRoutesPath, "Sea");
 
-            // Ensure directories exist
-            Directory.CreateDirectory(_landPath);
-            Directory.CreateDirectory(_seaPath);
+            // No need to create directories here initially; EnsureInitialDataPresent will handle it.
+            // However, ensuring the base CustomRoutes directory exists is good practice,
+            // even if no routes are restored yet.
+            Directory.CreateDirectory(_customRoutesPath);
             Directory.CreateDirectory(_customLandPath);
             Directory.CreateDirectory(_customSeaPath);
+
+            // Call this at DataManager instantiation to ensure data is present/updated
+            EnsureInitialDataPresent();
         }
 
         // --- Settlement Management ---
         public Settlement GetSettlementByNameAndRegion(string name, string region)
         {
-            // Creates a new settlement. Settlement constructor now stores original casing.
             return new Settlement(name, region);
         }
 
+        /// <summary>
+        /// Ensures that the WorldData directory is up-to-date.
+        /// It backs up existing custom routes, downloads and extracts the latest WorldData.zip
+        /// (overwriting default data), and then restores the custom routes.
+        /// This method is designed to be called once at application startup.
+        /// </summary>
+        private void EnsureInitialDataPresent()
+        {
+            Console.WriteLine("\nChecking for latest WorldData...");
+
+            // Step 1: Backup existing custom routes if they exist
+            Dictionary<string, List<string>> backedUpCustomLandRoutes = new Dictionary<string, List<string>>();
+            Dictionary<string, List<string>> backedUpCustomSeaRoutes = new Dictionary<string, List<string>>();
+            bool customDataBackedUp = false;
+
+            if (Directory.Exists(_customLandPath))
+            {
+                foreach (string file in Directory.GetFiles(_customLandPath, "*.txt"))
+                {
+                    backedUpCustomLandRoutes[Path.GetFileName(file)] = File.ReadAllLines(file).ToList();
+                    customDataBackedUp = true;
+                }
+            }
+            if (Directory.Exists(_customSeaPath))
+            {
+                foreach (string file in Directory.GetFiles(_customSeaPath, "*.txt"))
+                {
+                    backedUpCustomSeaRoutes[Path.GetFileName(file)] = File.ReadAllLines(file).ToList();
+                    customDataBackedUp = true;
+                }
+            }
+
+            if (customDataBackedUp)
+            {
+                Console.WriteLine("Backed up existing custom route data.");
+            }
+
+            // Step 2: Attempt to download and extract the latest WorldData.zip
+            string zipUrl = $"{GitHubBaseUrl}WorldData.zip"; // Explicitly point to WorldData.zip within the base URL folder
+            string localZipPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WorldData.zip"); // Save zip in app's base dir
+
+            bool downloadedSuccessfully = false;
+
+            try
+            {
+                Console.WriteLine($"Attempting to download WorldData.zip from: {zipUrl}");
+                byte[] zipData = _httpClient.GetByteArrayAsync(zipUrl).Result;
+                File.WriteAllBytes(localZipPath, zipData);
+                Console.WriteLine($"Downloaded WorldData.zip to {localZipPath}.");
+                downloadedSuccessfully = true;
+
+                // Delete existing _basePath (WorldData) to ensure a clean slate for extraction,
+                // this will remove old default data but NOT the custom routes backup.
+                if (Directory.Exists(_basePath))
+                {
+                    Directory.Delete(_basePath, true);
+                    Console.WriteLine($"Cleaned existing {_basePath} directory.");
+                }
+                Directory.CreateDirectory(_basePath); // Recreate the main WorldData folder
+
+                // Extract the zip file to _basePath
+                // The 'true' argument means overwrite existing files if any somehow remain.
+                ZipFile.ExtractToDirectory(localZipPath, _basePath, true);
+                Console.WriteLine($"Extracted WorldData.zip to {_basePath}.");
+
+                // Delete the downloaded zip file after extraction
+                File.Delete(localZipPath);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Failed to download or unpack WorldData.zip from GitHub: {ex.Message}");
+                downloadedSuccessfully = false; // Mark failure
+                // If download fails, ensure _basePath exists for the app to function with whatever local data it has.
+                if (!Directory.Exists(_basePath))
+                {
+                    Directory.CreateDirectory(_basePath);
+                    Directory.CreateDirectory(_landPath);
+                    Directory.CreateDirectory(_seaPath);
+                }
+            }
+
+            // Step 3: Restore custom routes
+            if (customDataBackedUp)
+            {
+                Console.WriteLine("Restoring custom route data...");
+                // Ensure custom directories exist before restoring
+                Directory.CreateDirectory(_customLandPath);
+                Directory.CreateDirectory(_customSeaPath);
+
+                foreach (var entry in backedUpCustomLandRoutes)
+                {
+                    File.WriteAllLines(Path.Combine(_customLandPath, entry.Key), entry.Value);
+                }
+                foreach (var entry in backedUpCustomSeaRoutes)
+                {
+                    File.WriteAllLines(Path.Combine(_customSeaPath, entry.Key), entry.Value);
+                }
+                Console.WriteLine("Custom route data restored.");
+            }
+            else
+            {
+                Console.WriteLine("No custom data to restore.");
+            }
+
+            Console.WriteLine("WorldData check complete.");
+        }
+
+
         // --- Route Loading ---
+        // LoadLandRoutesFromRegionFile and LoadSeaRoutesFromRegionFile no longer call EnsureInitialDataPresent,
+        // as it's now called once at DataManager instantiation.
         public List<LandRoute> LoadLandRoutesFromRegionFile(string regionName)
         {
             List<LandRoute> routes = new List<LandRoute>();
             string defaultFilePath = Path.Combine(_landPath, $"{regionName.ToUpperInvariant()}.txt");
             string customFilePath = Path.Combine(_customLandPath, $"{regionName.ToUpperInvariant()}.txt");
 
-            // Load from default and custom files
-            routes.AddRange(LoadRoutesFromFile<LandRoute>(defaultFilePath, regionName, RouteType.Land));
-            routes.AddRange(LoadRoutesFromFile<LandRoute>(customFilePath, regionName, RouteType.Land));
-
+            // Load from existing local files.
+            if (File.Exists(defaultFilePath))
+            {
+                routes.AddRange(LoadRoutesFromSpecificFile<LandRoute>(defaultFilePath, regionName, RouteType.Land));
+            }
+            if (File.Exists(customFilePath))
+            {
+                routes.AddRange(LoadRoutesFromSpecificFile<LandRoute>(customFilePath, regionName, RouteType.Land));
+            }
             return routes;
         }
 
@@ -77,38 +196,28 @@ namespace YourFantasyWorldProject.Managers
             string defaultFilePath = Path.Combine(_seaPath, $"{regionName.ToUpperInvariant()}.txt");
             string customFilePath = Path.Combine(_customSeaPath, $"{regionName.ToUpperInvariant()}.txt");
 
-            // Load from default and custom files
-            routes.AddRange(LoadRoutesFromFile<SeaRoute>(defaultFilePath, regionName, RouteType.Sea));
-            routes.AddRange(LoadRoutesFromFile<SeaRoute>(customFilePath, regionName, RouteType.Sea));
-
+            // Load from existing local files.
+            if (File.Exists(defaultFilePath))
+            {
+                routes.AddRange(LoadRoutesFromSpecificFile<SeaRoute>(defaultFilePath, regionName, RouteType.Sea));
+            }
+            if (File.Exists(customFilePath))
+            {
+                routes.AddRange(LoadRoutesFromSpecificFile<SeaRoute>(customFilePath, regionName, RouteType.Sea));
+            }
             return routes;
         }
 
         /// <summary>
-        /// Generic helper to load routes from a specified file path.
+        /// Helper to load routes from a specific file path. Does not attempt GitHub downloads itself.
         /// </summary>
-        private List<T> LoadRoutesFromFile<T>(string filePath, string regionName, RouteType routeType) where T : IRoute
+        private List<T> LoadRoutesFromSpecificFile<T>(string filePath, string regionName, RouteType routeType) where T : IRoute
         {
             List<T> routes = new List<T>();
 
             if (!File.Exists(filePath))
             {
-                Console.WriteLine($"Route file not found: {Path.GetFileName(filePath)}. Attempting to download from GitHub...");
-                // Attempt to download and decrypt from GitHub
-                string githubUrlSegment = (routeType == RouteType.Land) ? "LandRoutes" : "SeaRoutes";
-                string githubUrl = $"{GitHubBaseUrl}{githubUrlSegment}/{regionName.ToUpperInvariant()}.enc";
-                try
-                {
-                    byte[] encryptedData = _httpClient.GetByteArrayAsync(githubUrl).Result;
-                    string decryptedContent = DecryptStringFromBytes_Aes(encryptedData, Key, IV);
-                    File.WriteAllText(filePath, decryptedContent); // Save decrypted content to local default path
-                    Console.WriteLine($"Downloaded and decrypted route data for {regionName} from GitHub.");
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Failed to download or decrypt route data for {regionName} from GitHub: {ex.Message}");
-                    return routes; // Return empty list if download fails
-                }
+                return routes;
             }
 
             try
@@ -121,14 +230,13 @@ namespace YourFantasyWorldProject.Managers
                     string trimmedLine = line.Trim();
                     if (string.IsNullOrWhiteSpace(trimmedLine))
                     {
-                        continue; // Skip empty lines
+                        continue;
                     }
 
                     if (!trimmedLine.StartsWith("\t")) // This is an origin settlement line
                     {
                         string[] originParts = trimmedLine.Split('\t');
                         string originName = originParts[0].Trim();
-                        // For origin region, prioritize what's in the file, otherwise use the filename's region
                         string originRegion = originParts.Length > 1 ? originParts[1].Trim() : Path.GetFileNameWithoutExtension(filePath);
                         currentOrigin = GetSettlementByNameAndRegion(originName, originRegion);
                     }
@@ -171,28 +279,43 @@ namespace YourFantasyWorldProject.Managers
 
         public List<string> GetAllRegions()
         {
+            // Ensure data is present before enumerating directories
+            // EnsureInitialDataPresent() is called in constructor, so no need to call it here.
+
             HashSet<string> regions = new HashSet<string>();
 
             // Get regions from default land route files
-            foreach (string filePath in Directory.GetFiles(_landPath, "*.txt"))
+            if (Directory.Exists(_landPath))
             {
-                regions.Add(Path.GetFileNameWithoutExtension(filePath));
+                foreach (string filePath in Directory.GetFiles(_landPath, "*.txt"))
+                {
+                    regions.Add(Path.GetFileNameWithoutExtension(filePath));
+                }
             }
             // Get regions from custom land route files
-            foreach (string filePath in Directory.GetFiles(_customLandPath, "*.txt"))
+            if (Directory.Exists(_customLandPath))
             {
-                regions.Add(Path.GetFileNameWithoutExtension(filePath));
+                foreach (string filePath in Directory.GetFiles(_customLandPath, "*.txt"))
+                {
+                    regions.Add(Path.GetFileNameWithoutExtension(filePath));
+                }
             }
 
             // Get regions from default sea route files
-            foreach (string filePath in Directory.GetFiles(_seaPath, "*.txt"))
+            if (Directory.Exists(_seaPath))
             {
-                regions.Add(Path.GetFileNameWithoutExtension(filePath));
+                foreach (string filePath in Directory.GetFiles(_seaPath, "*.txt"))
+                {
+                    regions.Add(Path.GetFileNameWithoutExtension(filePath));
+                }
             }
             // Get regions from custom sea route files
-            foreach (string filePath in Directory.GetFiles(_customSeaPath, "*.txt"))
+            if (Directory.Exists(_customSeaPath))
             {
-                regions.Add(Path.GetFileNameWithoutExtension(filePath));
+                foreach (string filePath in Directory.GetFiles(_customSeaPath, "*.txt"))
+                {
+                    regions.Add(Path.GetFileNameWithoutExtension(filePath));
+                }
             }
 
             return regions.ToList();
@@ -245,29 +368,47 @@ namespace YourFantasyWorldProject.Managers
 
             // Check if the origin settlement already exists as a header in the file
             // Compare using the invariant uppercase name for lookup
-            string originHeaderContent = $"{route.Origin.Name}\t{route.Origin.Region}"; // Use original casing for header content
+            string originHeaderContent = $"{route.Origin.Name}"; // Start with just the name
+            if (!string.IsNullOrWhiteSpace(route.Origin.Region))
+            {
+                originHeaderContent += $"\t{route.Origin.Region}"; // Add region if it exists
+            }
+
+
             int originIndex = -1;
             for (int i = 0; i < fileContent.Count; i++)
             {
                 // To find an existing header, we need to compare its content using invariant casing.
-                // Assuming headers are "NAME\tREGION"
+                // Headers can be "NAME" or "NAME\tREGION"
                 string fileLineTrimmed = fileContent[i].Trim();
-                if (!fileLineTrimmed.StartsWith("\t") && !string.IsNullOrWhiteSpace(fileLineTrimmed)) // This is a potential origin header
+                // An origin header does NOT start with a tab
+                if (!fileLineTrimmed.StartsWith("\t") && !string.IsNullOrWhiteSpace(fileLineTrimmed))
                 {
                     string[] parts = fileLineTrimmed.Split('\t');
+                    // Check if name matches (case-insensitive)
                     if (parts.Length >= 1 && parts[0].Trim().ToUpperInvariant().Equals(route.Origin.Name.ToUpperInvariant()))
                     {
-                        if (parts.Length == 2 && parts[1].Trim().ToUpperInvariant().Equals(route.Origin.Region.ToUpperInvariant()))
+                        // If origin has a region, make sure the file line also has that region and it matches
+                        if (!string.IsNullOrWhiteSpace(route.Origin.Region))
                         {
-                            originIndex = i;
-                            originFound = true;
-                            break;
+                            if (parts.Length == 2 && parts[1].Trim().ToUpperInvariant().Equals(route.Origin.Region.ToUpperInvariant()))
+                            {
+                                originIndex = i;
+                                originFound = true;
+                                break;
+                            }
                         }
-                        else if (parts.Length == 1 && string.IsNullOrWhiteSpace(route.Origin.Region)) // Case for 'TINVERKE' without region
+                        else // Origin doesn't have a specific region (like "TINVERKE" alone)
                         {
-                            originIndex = i;
-                            originFound = true;
-                            break;
+                            // If the file line is just the name (no tab or subsequent part), it's a match.
+                            // Or if the file line has a region, but our origin doesn't, this might still be considered a match if the region is the "default" for the file.
+                            // For simplicity, let's say "NAME" matches if origin.Region is empty, or "NAME\tREGION" matches if origin.Region is present and matches.
+                            if (parts.Length == 1) // Only name present in file header
+                            {
+                                originIndex = i;
+                                originFound = true;
+                                break;
+                            }
                         }
                     }
                 }
@@ -277,9 +418,7 @@ namespace YourFantasyWorldProject.Managers
             if (!originFound)
             {
                 // If origin not found, add its header with original casing.
-                // The example shows "TINVERKE" on its own line if it's the only info.
-                // If region is also present, it should be "TINVERKE\tKingdom of Faalskarth".
-                string newOriginLine = $"{route.Origin.Name}";
+                string newOriginLine = route.Origin.Name;
                 if (!string.IsNullOrWhiteSpace(route.Origin.Region))
                 {
                     newOriginLine += $"\t{route.Origin.Region}";
@@ -444,9 +583,9 @@ namespace YourFantasyWorldProject.Managers
 
                         // Reconstruct header with original (now title-cased) input
                         string repairedOriginLine = originName;
-                        if (!string.IsNullOrWhiteSpace(originRegion) && !originRegion.Equals(Path.GetFileNameWithoutExtension(filePath), StringComparison.OrdinalIgnoreCase))
+                        if (originParts.Length == 2)
                         {
-                            repairedOriginLine += $"\t{originRegion}";
+                            repairedOriginLine += $"\t{textInfo.ToTitleCase(originParts[1].Trim().ToLower())}";
                         }
                         repairedLines.Add(repairedOriginLine);
                     }
@@ -477,7 +616,7 @@ namespace YourFantasyWorldProject.Managers
                             if (parts.Length > 3 && !string.IsNullOrWhiteSpace(parts[3]))
                             {
                                 biomes = parts[3].Split(',', StringSplitOptions.RemoveEmptyEntries)
-                                                .Select(s => s.Trim()) // Store as read for now
+                                                .Select(s => s.Trim())
                                                 .ToList();
                             }
                             if (parts.Length > 4 && !string.IsNullOrWhiteSpace(parts[4]))
@@ -501,7 +640,6 @@ namespace YourFantasyWorldProject.Managers
                             }
                             if (!biomes.Any()) { biomes.Add("Unknown"); biomeDistances.Add(1.0); lineRepaired = true; issuesFound.Add($"Line {lineNumber + 1}: No biomes found, setting to Unknown."); }
 
-                            // Reconstruct the line with canonical formatting and proper casing for biomes
                             repairedLines.Add(
                                 $"\t{destName}" +
                                 $"\t{destRegion}" +

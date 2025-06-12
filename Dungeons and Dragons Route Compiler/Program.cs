@@ -1,6 +1,6 @@
 ﻿// Program.cs
 using System;
-using System.IO; // Added for File operations
+using System.IO;
 using System.Linq;
 using YourFantasyWorldProject.Classes;
 using YourFantasyWorldProject.Managers;
@@ -11,35 +11,28 @@ namespace YourFantasyWorldProject
 {
     class Program
     {
-        // Path to the file storing the DM password
         private const string DmPasswordFilePath = "dm_password.txt";
 
         static void Main(string[] args)
         {
             Console.WriteLine("Welcome to the Fantasy World Route Manager!");
 
-            // Initialize DataManager, which ensures folder structure exists
-            DataManager dataManager = new DataManager();
-            // Initialize Pathfinder
+            DataManager dataManager = new DataManager(); // EnsureInitialDataPresent is called here
             Pathfinder pathfinder = new Pathfinder(dataManager);
-            // Initialize RouteManager, which loads all data at startup and depends on Pathfinder
-            RouteManager routeManager = new RouteManager(dataManager, pathfinder); // Pass pathfinder here
+            RouteManager routeManager = new RouteManager(dataManager, pathfinder);
 
-            // Initial graph build after all data is loaded
-            routeManager.RebuildGraph();
+            // Initial graph build after all data is loaded by DataManager's constructor
+            routeManager.RebuildGraph(); // Still rebuild graph to ensure the in-memory graph is fresh
 
-            // Attempt to load the DM password. This method will return null if the file isn't found or is empty.
             string dmPassword = LoadDmPassword();
 
             if (dmPassword == null)
             {
-                // If DM password file is not found or empty, skip straight to Player Mode
                 Console.WriteLine("\nDM password file not found or empty. Starting in Player Mode automatically.");
-                RunPlayerMenu(pathfinder, dataManager); // Pass dataManager to player menu
+                RunPlayerMenu(pathfinder, dataManager, routeManager); // Pass routeManager to player menu
             }
             else
             {
-                // If a DM password was successfully loaded, offer the main menu with DM access.
                 bool appRunning = true;
                 while (appRunning)
                 {
@@ -54,11 +47,11 @@ namespace YourFantasyWorldProject
                     {
                         case "1": // DM Mode
                             Console.Write("Enter DM password: ");
-                            string enteredPassword = ConsoleInput.GetStringInput(""); // Read password without prompt
+                            string enteredPassword = ConsoleInput.GetStringInput("");
                             if (enteredPassword == dmPassword)
                             {
                                 Console.WriteLine("DM access granted.");
-                                RunDmMenu(routeManager, pathfinder, dataManager); // Pass dataManager to DM menu
+                                RunDmMenu(routeManager, pathfinder, dataManager);
                             }
                             else
                             {
@@ -66,7 +59,7 @@ namespace YourFantasyWorldProject
                             }
                             break;
                         case "2": // Player Mode
-                            RunPlayerMenu(pathfinder, dataManager); // Pass dataManager to player menu
+                            RunPlayerMenu(pathfinder, dataManager, routeManager); // Pass routeManager to player menu
                             break;
                         case "0":
                             appRunning = false;
@@ -80,14 +73,13 @@ namespace YourFantasyWorldProject
             }
         }
 
-        // --- DM Mode Menu ---
         static void RunDmMenu(RouteManager routeManager, Pathfinder pathfinder, DataManager dataManager)
         {
             bool dmMenuRunning = true;
             while (dmMenuRunning)
             {
                 Console.WriteLine("\n--- DM Menu ---");
-                Console.WriteLine("1. Add Route");
+                Console.WriteLine("1. Add Route (DM controlled: Choose Custom/Default)"); // Clarified DM route creation
                 Console.WriteLine("2. Remove Route");
                 Console.WriteLine("3. Edit Route");
                 Console.WriteLine("4. Validate Files");
@@ -95,8 +87,6 @@ namespace YourFantasyWorldProject
                 Console.WriteLine("6. Print Routes for a Region");
                 Console.WriteLine("7. Check Total Unique Settlements");
                 Console.WriteLine("8. Find Route (Dijkstra's)");
-                Console.WriteLine("9. Create Land Route (Choose Custom/Default)"); // Clarified menu text
-                Console.WriteLine("10. Create Sea Route (Choose Custom/Default)"); // New menu option for sea route
                 Console.WriteLine("0. Back to Main Menu");
 
                 string choice = ConsoleInput.GetStringInput("Enter your choice: ");
@@ -104,7 +94,7 @@ namespace YourFantasyWorldProject
                 switch (choice)
                 {
                     case "1":
-                        routeManager.AddRoute(); // This method now handles custom/default choice internally
+                        routeManager.AddRoute(); // This now internally uses CreateDmLandRoute/CreateDmSeaRoute
                         break;
                     case "2":
                         routeManager.RemoveRoute();
@@ -150,12 +140,6 @@ namespace YourFantasyWorldProject
                             Console.WriteLine("Invalid origin or destination settlement entered for pathfinding.");
                         }
                         break;
-                    case "9":
-                        pathfinder.CreateLandRoute(); // Calls the renamed method
-                        break;
-                    case "10": // New case for creating sea routes explicitly
-                        pathfinder.CreateSeaRoute(); // Calls the renamed method
-                        break;
                     case "0":
                         dmMenuRunning = false;
                         Console.WriteLine("Exiting DM Menu.");
@@ -167,15 +151,15 @@ namespace YourFantasyWorldProject
             }
         }
 
-        // --- Player Mode Menu ---
-        static void RunPlayerMenu(Pathfinder pathfinder, DataManager dataManager)
+        static void RunPlayerMenu(Pathfinder pathfinder, DataManager dataManager, RouteManager routeManager) // Added routeManager parameter
         {
             bool playerMenuRunning = true;
             while (playerMenuRunning)
             {
                 Console.WriteLine("\n--- Player Menu ---");
                 Console.WriteLine("1. Find Route (Dijkstra's)");
-                Console.WriteLine("2. Create Custom Sea Route (for saving)"); // Clarified Player Mode option
+                Console.WriteLine("2. Create Custom Land Route (Player only)"); // Player can only create custom
+                Console.WriteLine("3. Create Custom Sea Route (Player only)"); // Player can only create custom
                 Console.WriteLine("0. Back to Main Menu");
 
                 string choice = ConsoleInput.GetStringInput("Enter your choice: ");
@@ -209,10 +193,12 @@ namespace YourFantasyWorldProject
                         }
                         break;
                     case "2":
-                        // In Player Mode, this will still call the CreateSeaRoute method, which now includes the custom/default choice.
-                        // The note emphasizes that this will save the route.
-                        Console.WriteLine("Note: This option will create and save a new sea route to your local data.");
-                        pathfinder.CreateSeaRoute(); // Calls the renamed method
+                        pathfinder.CreatePlayerCustomLandRoute(); // New method for player-only custom land route
+                        routeManager.RebuildGraph(); // Rebuild graph to include new player custom route
+                        break;
+                    case "3":
+                        pathfinder.CreatePlayerCustomSeaRoute(); // New method for player-only custom sea route
+                        routeManager.RebuildGraph(); // Rebuild graph to include new player custom route
                         break;
                     case "0":
                         playerMenuRunning = false;
@@ -225,21 +211,15 @@ namespace YourFantasyWorldProject
             }
         }
 
-        // --- DM Password Flexibility ---
-        /// <summary>
-        /// Loads the DM password from a local file.
-        /// Returns the password string if found and not empty, otherwise returns null.
-        /// </summary>
         static string LoadDmPassword()
         {
             try
             {
-                // The full path will be where the .exe is located
                 string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, DmPasswordFilePath);
 
-                if (File.Exists(fullPath)) // Check if the file exists at the full path
+                if (File.Exists(fullPath))
                 {
-                    string password = File.ReadAllText(fullPath).Trim(); // Read from the full path
+                    string password = File.ReadAllText(fullPath).Trim();
                     if (!string.IsNullOrEmpty(password))
                     {
                         Console.WriteLine($"DM password loaded from {fullPath}");
@@ -247,22 +227,20 @@ namespace YourFantasyWorldProject
                     }
                     else
                     {
-                        // File exists but is empty
                         Console.WriteLine($"DM password file '{fullPath}' is empty.");
-                        return null; // Signal that no valid password was found
+                        return null;
                     }
                 }
                 else
                 {
-                    // File does not exist
                     Console.WriteLine($"DM password file '{fullPath}' not found.");
-                    return null; // Signal that no valid password was found
+                    return null;
                 }
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Error loading DM password from file: {ex.Message}.");
-                return null; // Signal an error occurred
+                return null;
             }
         }
     }

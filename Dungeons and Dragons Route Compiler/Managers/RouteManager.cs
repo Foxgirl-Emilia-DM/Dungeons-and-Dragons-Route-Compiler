@@ -107,10 +107,10 @@ namespace YourFantasyWorldProject.Managers
             switch (choice)
             {
                 case "1":
-                    _pathfinder.CreateLandRoute(); // Call the updated method
+                    _pathfinder.CreateDmLandRoute(); // Call the updated method
                     break;
                 case "2":
-                    _pathfinder.CreateSeaRoute(); // Call the updated method
+                    _pathfinder.CreateDmSeaRoute(); // Call the updated method
                     break;
                 default:
                     Console.WriteLine("Invalid route type choice.");

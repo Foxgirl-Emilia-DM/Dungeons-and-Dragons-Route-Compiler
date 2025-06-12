@@ -14,11 +14,20 @@
     </Content>
   </ItemGroup>
 
-  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+  <Target Name="PostBuildZip" AfterTargets="PostBuildEvent">
+    <!-- Define variables for clarity -->
+    <PropertyGroup>
+      <SourceDir>$(ProjectDir)WorldData</SourceDir>
+      <ZipFile>$(ProjectDir)WorldData.zip</ZipFile>
+    </PropertyGroup>
     <Exec Command="
-      echo Copying WorldData to project root...
-      xcopy &quot;$(OutDir)WorldData&quot; &quot;$(ProjectDir)WorldData&quot; /E /Y /I
-      echo WorldData copied successfully.
+      echo Zipping WorldData folder...
+      if exist &quot;$(SourceDir)&quot; (
+          powershell -Command &quot;Compress-Archive -Path '$(SourceDir)' -DestinationPath '$(ZipFile)' -Force&quot;
+          echo WorldData.zip created/overwritten successfully.
+      ) else (
+          echo Warning: WorldData directory not found at '$(SourceDir)'. Skipping zipping.
+      )
     " />
   </Target>
   

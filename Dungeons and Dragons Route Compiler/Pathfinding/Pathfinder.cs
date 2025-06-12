@@ -56,7 +56,6 @@ namespace YourFantasyWorldProject.Pathfinding
             _graph.Clear(); // Clear existing graph before rebuilding
 
             // Add all settlements to the graph first to ensure all nodes exist
-            // This is important for settlements that might only be destinations but not origins
             HashSet<Settlement> allSettlements = new HashSet<Settlement>();
             foreach (var route in landRoutes)
             {
@@ -81,14 +80,10 @@ namespace YourFantasyWorldProject.Pathfinding
             // Add land routes to the graph
             foreach (var route in landRoutes)
             {
-                // Ensure origin and destination exist in the graph
                 if (!_graph.ContainsKey(route.Origin)) _graph[route.Origin] = new List<Edge>();
                 if (!_graph.ContainsKey(route.Destination)) _graph[route.Destination] = new List<Edge>();
 
-                // Calculate base time for the land route (distance / speed)
-                // We'll use total distance and an average speed for simplicity here.
-                // More complex calculations involving biomes will be done in the pathfinding algorithm.
-                double baseTimeHours = route.TotalDistance / (NORMAL_WALK_MPH * MPH_TO_KMH_FACTOR); // Example: normal walk speed
+                double baseTimeHours = route.TotalDistance / (NORMAL_WALK_MPH * MPH_TO_KMH_FACTOR);
 
                 _graph[route.Origin].Add(new Edge(route.Destination, baseTimeHours, route));
             }
@@ -96,12 +91,10 @@ namespace YourFantasyWorldProject.Pathfinding
             // Add sea routes to the graph
             foreach (var route in seaRoutes)
             {
-                // Ensure origin and destination exist in the graph
                 if (!_graph.ContainsKey(route.Origin)) _graph[route.Origin] = new List<Edge>();
                 if (!_graph.ContainsKey(route.Destination)) _graph[route.Destination] = new List<Edge>();
 
-                // Calculate base time for the sea route (distance / speed)
-                double baseTimeHours = route.Distance / (ShipType.SailingShip.ToString().Equals("SailingShip") ? 2 * MPH_TO_KMH_FACTOR : 1.5 * MPH_TO_KMH_FACTOR); // Example: SailingShip speed
+                double baseTimeHours = route.Distance / (ShipType.SailingShip.ToString().Equals("SailingShip") ? 2 * MPH_TO_KMH_FACTOR : 1.5 * MPH_TO_KMH_FACTOR);
 
                 _graph[route.Origin].Add(new Edge(route.Destination, baseTimeHours, route));
             }
@@ -114,14 +107,6 @@ namespace YourFantasyWorldProject.Pathfinding
         /// Finds the shortest path between two settlements using Dijkstra's algorithm.
         /// Considers different travel speeds and biome modifiers.
         /// </summary>
-        /// <param name="origin">The starting settlement.</param>
-        /// <param name="destination">The destination settlement.</param>
-        /// <param name="numTravelers">Number of travelers in the party.</param>
-        /// <param name="travelSpeed">The desired travel speed (Normal, Fast, Slow).</param>
-        /// <param name="shipType">The type of ship to use for sea travel.</param>
-        /// <param name="mountType">The type of mount to use for land travel.</param>
-        /// <param name="preference">User preference for route types (LandOnly, SeaOnly, Mixed).</param>
-        /// <returns>A JourneyResult object containing path details, or an empty result if no path is found.</returns>
         public JourneyResult FindPath(
             Settlement origin, Settlement destination,
             int numTravelers,
@@ -134,9 +119,8 @@ namespace YourFantasyWorldProject.Pathfinding
                 return new JourneyResult(origin, destination, null, null);
             }
 
-            // Dijkstra's algorithm implementation
             var distances = new Dictionary<Settlement, double>();
-            var previous = new Dictionary<Settlement, IRoute>(); // Stores the route taken to reach this settlement
+            var previous = new Dictionary<Settlement, IRoute>();
             var priorityQueue = new MinHeap<Settlement>();
 
             foreach (var settlement in _graph.Keys)
@@ -152,13 +136,11 @@ namespace YourFantasyWorldProject.Pathfinding
             {
                 Settlement current = priorityQueue.Dequeue();
 
-                // If we reached the destination, we can stop
                 if (current.Equals(destination))
                 {
                     break;
                 }
 
-                // If current has not been added to graph, continue
                 if (!_graph.ContainsKey(current))
                 {
                     continue;
@@ -166,7 +148,6 @@ namespace YourFantasyWorldProject.Pathfinding
 
                 foreach (var edge in _graph[current])
                 {
-                    // Filter routes based on preference
                     if (preference == RoutePreference.LandOnly && edge.Route is SeaRoute) continue;
                     if (preference == RoutePreference.SeaOnly && edge.Route is LandRoute) continue;
 
@@ -177,13 +158,13 @@ namespace YourFantasyWorldProject.Pathfinding
                     if (edge.Route is LandRoute landRoute)
                     {
                         routeDistance = landRoute.TotalDistance;
-                        biomesTraversed = landRoute.Biomes; // Get biomes for this segment
-                        timeCost = CalculateLandRouteTimeAndCost(landRoute, travelSpeed, mountType, numTravelers, out _); // Cost not used here, only time
+                        biomesTraversed = landRoute.Biomes;
+                        timeCost = CalculateLandRouteTimeAndCost(landRoute, travelSpeed, mountType, numTravelers, out _);
                     }
                     else if (edge.Route is SeaRoute seaRoute)
                     {
                         routeDistance = seaRoute.Distance;
-                        timeCost = CalculateSeaRouteTimeAndCost(seaRoute, shipType, numTravelers, out _); // Cost not used here, only time
+                        timeCost = CalculateSeaRouteTimeAndCost(seaRoute, shipType, numTravelers, out _);
                     }
 
                     double newDist = distances[current] + timeCost;
@@ -191,20 +172,19 @@ namespace YourFantasyWorldProject.Pathfinding
                     if (newDist < distances[edge.Destination])
                     {
                         distances[edge.Destination] = newDist;
-                        previous[edge.Destination] = edge.Route; // Store the route itself
+                        previous[edge.Destination] = edge.Route;
                         priorityQueue.Enqueue(edge.Destination, newDist);
                     }
                 }
             }
 
-            // Reconstruct path
             List<JourneySegment> pathSegments = new List<JourneySegment>();
             List<ResourceCost> estimatedResourceCosts = new List<ResourceCost>();
             double totalRations = 0;
             double totalWaterLand = 0;
             double totalWaterSea = 0;
 
-            if (previous[destination] == null && !origin.Equals(destination)) // No path found
+            if (previous[destination] == null && !origin.Equals(destination))
             {
                 return new JourneyResult(origin, destination, null, null);
             }
@@ -213,7 +193,7 @@ namespace YourFantasyWorldProject.Pathfinding
             while (pathCurrent != null && !pathCurrent.Equals(origin))
             {
                 IRoute route = previous[pathCurrent];
-                if (route == null) break; // Should not happen if path found, but as a safeguard
+                if (route == null) break;
 
                 Settlement segmentStart = route.Origin;
                 Settlement segmentEnd = route.Destination;
@@ -247,7 +227,7 @@ namespace YourFantasyWorldProject.Pathfinding
                 }
 
                 pathSegments.Insert(0, new JourneySegment(segmentStart, segmentEnd, segmentDistance, segmentTimeHours, segmentCost, route, biomes));
-                pathCurrent = segmentStart; // Move to the origin of the current segment
+                pathCurrent = segmentStart;
             }
 
             if (totalRations > 0) estimatedResourceCosts.Add(new ResourceCost("Rations", totalRations));
@@ -281,13 +261,12 @@ namespace YourFantasyWorldProject.Pathfinding
                     break;
             }
 
-            // Apply mount speed if applicable
             double mountSpeedMph = 0;
             switch (mountType)
             {
                 case MountType.RidingHorse:
                 case MountType.Warhorse:
-                    mountSpeedMph = 6; // Example: 6 mph for horses
+                    mountSpeedMph = 6;
                     break;
                 case MountType.None:
                 default:
@@ -295,11 +274,10 @@ namespace YourFantasyWorldProject.Pathfinding
                     break;
             }
 
-            // Use the faster of walking or mounted speed, if a mount is present
             double effectiveSpeedMph = (mountType != MountType.None) ? Math.Max(baseSpeedMph, mountSpeedMph) : baseSpeedMph;
             double effectiveSpeedKmh = effectiveSpeedMph * MPH_TO_KMH_FACTOR;
 
-            if (effectiveSpeedKmh <= 0) return double.MaxValue; // Avoid division by zero or negative speed
+            if (effectiveSpeedKmh <= 0) return double.MaxValue;
 
             for (int i = 0; i < route.Biomes.Count; i++)
             {
@@ -307,14 +285,10 @@ namespace YourFantasyWorldProject.Pathfinding
                 double distance = route.BiomeDistances[i];
                 double difficultyMultiplier = BiomeModifier.GetMultiplier(biome);
 
-                // Adjusted distance due to biome difficulty
                 double effectiveDistance = distance * difficultyMultiplier;
 
-                // Time for this biome segment
                 totalTimeHours += effectiveDistance / effectiveSpeedKmh;
 
-                // Cost for this biome segment (example: 0.1 gold per km per person, adjusted by difficulty)
-                // This is a placeholder; actual costs might depend on specific items, tolls, etc.
                 totalCost += (effectiveDistance * 0.1 * numTravelers);
             }
 
@@ -346,20 +320,19 @@ namespace YourFantasyWorldProject.Pathfinding
                     break;
                 case ShipType.None:
                 default:
-                    shipSpeedMph = 0; // Should not happen if a ship is selected
+                    shipSpeedMph = 0;
                     break;
             }
 
             if (shipSpeedMph <= 0)
             {
-                totalCost = double.MaxValue; // Cannot travel by sea without a ship/speed
+                totalCost = double.MaxValue;
                 return double.MaxValue;
             }
 
             double shipSpeedKmh = shipSpeedMph * MPH_TO_KMH_FACTOR;
             double timeHours = route.Distance / shipSpeedKmh;
 
-            // Example cost for sea travel: 0.05 gold per km per person
             totalCost = route.Distance * 0.05 * numTravelers;
 
             return timeHours;
@@ -367,12 +340,12 @@ namespace YourFantasyWorldProject.Pathfinding
 
 
         /// <summary>
-        /// Prompts the user to create a new land route and saves it,
+        /// Prompts the DM to create a new land route and saves it,
         /// allowing choice between default and custom folders.
         /// </summary>
-        public void CreateLandRoute() // Renamed from CreateCustomLandRoute
+        public void CreateDmLandRoute() // Renamed from CreateLandRoute
         {
-            Console.WriteLine("\n--- Create New Land Route ---");
+            Console.WriteLine("\n--- Create New Land Route (DM) ---");
             Console.WriteLine("Enter Origin Settlement Name and Region:");
             string originName = ConsoleInput.GetStringInput("Origin Settlement Name: ");
             string originRegion = ConsoleInput.GetStringInput("Origin Region Name: ");
@@ -391,14 +364,14 @@ namespace YourFantasyWorldProject.Pathfinding
 
             Console.WriteLine("Enter biomes traversed (comma-separated, e.g., Grasslands,Forest):");
             List<string> biomes = ConsoleInput.GetStringInput("Biomes: ").Split(',')
-                                              .Select(s => s.Trim()) // Do not force ToUpperInvariant here, store as read
+                                              .Select(s => s.Trim())
                                               .Where(s => !string.IsNullOrWhiteSpace(s))
                                               .ToList();
 
             Console.WriteLine("Enter distance for each biome in kilometers (comma-separated, e.g., 10km,5km):");
             List<double> biomeDistances = ConsoleInput.GetStringInput("Biome Distances: ").Split(',')
                                                     .Select(s => double.TryParse(s.Replace("km", "").Trim(), out double val) && val > 0 ? val : 0)
-                                                    .Where(d => d > 0) // Filter out invalid/zero distances
+                                                    .Where(d => d > 0)
                                                     .ToList();
 
             bool isMapped = ConsoleInput.GetBooleanInput("Is this route fully mapped (yes/no)?");
@@ -419,12 +392,12 @@ namespace YourFantasyWorldProject.Pathfinding
 
 
         /// <summary>
-        /// Prompts the user to create a new sea route and saves it,
+        /// Prompts the DM to create a new sea route and saves it,
         /// allowing choice between default and custom folders.
         /// </summary>
-        public void CreateSeaRoute() // Renamed from CreateCustomSeaRoute
+        public void CreateDmSeaRoute() // Renamed from CreateSeaRoute
         {
-            Console.WriteLine("\n--- Create New Sea Route ---");
+            Console.WriteLine("\n--- Create New Sea Route (DM) ---");
             Console.WriteLine("Enter Origin Settlement Name and Region:");
             string originName = ConsoleInput.GetStringInput("Origin Settlement Name: ");
             string originRegion = ConsoleInput.GetStringInput("Origin Region Name: ");
@@ -450,6 +423,86 @@ namespace YourFantasyWorldProject.Pathfinding
 
             _dataManager.SaveRoute(newRoute, RouteType.Sea, saveAsCustom);
             Console.WriteLine("Sea Route created and saved. Remember to rebuild the graph for it to be included in pathfinding.");
+        }
+
+        /// <summary>
+        /// Allows a player to create a new custom land route. This route will *always* be saved as custom.
+        /// </summary>
+        public void CreatePlayerCustomLandRoute()
+        {
+            Console.WriteLine("\n--- Create New Custom Land Route (Player) ---");
+            Console.WriteLine("Enter Origin Settlement Name and Region:");
+            string originName = ConsoleInput.GetStringInput("Origin Settlement Name: ");
+            string originRegion = ConsoleInput.GetStringInput("Origin Region Name: ");
+            Settlement origin = _dataManager.GetSettlementByNameAndRegion(originName, originRegion);
+
+            Console.WriteLine("Enter Destination Settlement Name and Region:");
+            string destName = ConsoleInput.GetStringInput("Destination Settlement Name: ");
+            string destRegion = ConsoleInput.GetStringInput("Destination Region Name: ");
+            Settlement destination = _dataManager.GetSettlementByNameAndRegion(destName, destRegion);
+
+            if (origin == null || destination == null)
+            {
+                Console.WriteLine("Invalid origin or destination settlement. Please ensure both exist or can be created.");
+                return;
+            }
+
+            Console.WriteLine("Enter biomes traversed (comma-separated, e.g., Grasslands,Forest):");
+            List<string> biomes = ConsoleInput.GetStringInput("Biomes: ").Split(',')
+                                              .Select(s => s.Trim())
+                                              .Where(s => !string.IsNullOrWhiteSpace(s))
+                                              .ToList();
+
+            Console.WriteLine("Enter distance for each biome in kilometers (comma-separated, e.g., 10km,5km):");
+            List<double> biomeDistances = ConsoleInput.GetStringInput("Biome Distances: ").Split(',')
+                                                    .Select(s => double.TryParse(s.Replace("km", "").Trim(), out double val) && val > 0 ? val : 0)
+                                                    .Where(d => d > 0)
+                                                    .ToList();
+
+            bool isMapped = ConsoleInput.GetBooleanInput("Is this route fully mapped (yes/no)?"); // Players can still mark if mapped
+
+            if (biomes.Count == 0 || biomeDistances.Count == 0 || biomes.Count != biomeDistances.Count)
+            {
+                Console.WriteLine("Invalid biome or distance input. Number of biomes must match number of distances, and both must be provided.");
+                return;
+            }
+
+            LandRoute newRoute = new LandRoute(origin, destination, biomes, biomeDistances, isMapped);
+
+            // Always save as custom for players
+            _dataManager.SaveRoute(newRoute, RouteType.Land, true);
+            Console.WriteLine("Custom Land Route created and saved. This route will be available in future sessions.");
+        }
+
+        /// <summary>
+        /// Allows a player to create a new custom sea route. This route will *always* be saved as custom.
+        /// </summary>
+        public void CreatePlayerCustomSeaRoute()
+        {
+            Console.WriteLine("\n--- Create New Custom Sea Route (Player) ---");
+            Console.WriteLine("Enter Origin Settlement Name and Region:");
+            string originName = ConsoleInput.GetStringInput("Origin Settlement Name: ");
+            string originRegion = ConsoleInput.GetStringInput("Origin Region Name: ");
+            Settlement origin = _dataManager.GetSettlementByNameAndRegion(originName, originRegion);
+
+            Console.WriteLine("Enter Destination Settlement Name and Region:");
+            string destName = ConsoleInput.GetStringInput("Destination Settlement Name: ");
+            string destRegion = ConsoleInput.GetStringInput("Destination Region Name: ");
+            Settlement destination = _dataManager.GetSettlementByNameAndRegion(destName, destRegion);
+
+            if (origin == null || destination == null)
+            {
+                Console.WriteLine("Invalid origin or destination settlement. Please ensure both exist or can be created.");
+                return;
+            }
+
+            double distance = ConsoleInput.GetDoubleInput("Enter distance in kilometers: ", 0.1);
+
+            SeaRoute newRoute = new SeaRoute(origin, destination, distance);
+
+            // Always save as custom for players
+            _dataManager.SaveRoute(newRoute, RouteType.Sea, true);
+            Console.WriteLine("Custom Sea Route created and saved. This route will be available in future sessions.");
         }
     }
 }
