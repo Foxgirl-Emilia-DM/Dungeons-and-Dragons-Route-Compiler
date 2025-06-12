@@ -13,7 +13,7 @@ namespace YourFantasyWorldProject
     {
         private const string DmPasswordFilePath = "dm_password.txt";
 
-        static void Main(string[] args)
+        static async System.Threading.Tasks.Task Main(string[] args)
         {
             Console.WriteLine("Welcome to the Fantasy World Route Manager!");
 
@@ -22,14 +22,15 @@ namespace YourFantasyWorldProject
             RouteManager routeManager = new RouteManager(dataManager, pathfinder);
 
             // Initial graph build after all data is loaded by DataManager's constructor
-            routeManager.RebuildGraph(); // Still rebuild graph to ensure the in-memory graph is fresh
+            // RouteManager's constructor already calls LoadAllRoutes, which in turn calls RebuildGraph
+            // So, no explicit call to routeManager.RebuildGraph() is needed here after construction.
 
             string dmPassword = LoadDmPassword();
 
             if (dmPassword == null)
             {
                 Console.WriteLine("\nDM password file not found or empty. Starting in Player Mode automatically.");
-                RunPlayerMenu(pathfinder, dataManager, routeManager); // Pass routeManager to player menu
+                RunPlayerMenu(pathfinder, routeManager); // Pass routeManager to player menu
             }
             else
             {
@@ -37,31 +38,31 @@ namespace YourFantasyWorldProject
                 while (appRunning)
                 {
                     Console.WriteLine("\n--- Main Menu ---");
-                    Console.WriteLine("1. DM Mode");
-                    Console.WriteLine("2. Player Mode");
-                    Console.WriteLine("0. Exit");
+                    Console.WriteLine("1. Player Menu");
+                    Console.WriteLine("2. DM Menu");
+                    Console.WriteLine("3. Exit");
 
-                    string mainMenuChoice = ConsoleInput.GetStringInput("Enter your choice: ");
+                    string choice = ConsoleInput.GetStringInput("Enter your choice: ");
 
-                    switch (mainMenuChoice)
+                    switch (choice)
                     {
-                        case "1": // DM Mode
+                        case "1":
+                            RunPlayerMenu(pathfinder, routeManager);
+                            break;
+                        case "2":
                             Console.Write("Enter DM password: ");
-                            string enteredPassword = ConsoleInput.GetStringInput("");
+                            string enteredPassword = Console.ReadLine();
                             if (enteredPassword == dmPassword)
                             {
-                                Console.WriteLine("DM access granted.");
-                                RunDmMenu(routeManager, pathfinder, dataManager);
+                                Console.WriteLine("DM password accepted.");
+                                RunDmMenu(pathfinder, routeManager);
                             }
                             else
                             {
                                 Console.WriteLine("Incorrect password.");
                             }
                             break;
-                        case "2": // Player Mode
-                            RunPlayerMenu(pathfinder, dataManager, routeManager); // Pass routeManager to player menu
-                            break;
-                        case "0":
+                        case "3":
                             appRunning = false;
                             Console.WriteLine("Exiting application. Goodbye!");
                             break;
@@ -73,76 +74,67 @@ namespace YourFantasyWorldProject
             }
         }
 
-        static void RunDmMenu(RouteManager routeManager, Pathfinder pathfinder, DataManager dataManager)
+        static void RunPlayerMenu(Pathfinder pathfinder, RouteManager routeManager)
         {
-            bool dmMenuRunning = true;
-            while (dmMenuRunning)
+            bool playerMenuRunning = true;
+            while (playerMenuRunning)
             {
-                Console.WriteLine("\n--- DM Menu ---");
-                Console.WriteLine("1. Add Route (DM controlled: Choose Custom/Default)"); // Clarified DM route creation
-                Console.WriteLine("2. Remove Route");
-                Console.WriteLine("3. Edit Route");
-                Console.WriteLine("4. Validate Files");
-                Console.WriteLine("5. Repair Files");
-                Console.WriteLine("6. Print Routes for a Region");
-                Console.WriteLine("7. Check Total Unique Settlements");
-                Console.WriteLine("8. Find Route (Dijkstra's)");
-                Console.WriteLine("0. Back to Main Menu");
+                Console.WriteLine("\n--- Player Menu ---");
+                Console.WriteLine("1. Find Route");
+                Console.WriteLine("2. Create Custom Land Route");
+                Console.WriteLine("3. Create Custom Sea Route");
+                Console.WriteLine("4. View All Settlements");
+                Console.WriteLine("5. Return to Main Menu");
 
                 string choice = ConsoleInput.GetStringInput("Enter your choice: ");
 
                 switch (choice)
                 {
                     case "1":
-                        routeManager.AddRoute(); // This now internally uses CreateDmLandRoute/CreateDmSeaRoute
+                        Console.WriteLine("\n--- Find Route ---");
+                        string startName = ConsoleInput.GetStringInput("Enter origin settlement name: ");
+                        string startRegion = ConsoleInput.GetStringInput("Enter origin region name: ");
+                        Settlement start = routeManager.GetSettlementByNameAndRegion(startName, startRegion);
+
+                        string endName = ConsoleInput.GetStringInput("Enter destination settlement name: ");
+                        string endRegion = ConsoleInput.GetStringInput("Enter destination region name: ");
+                        Settlement end = routeManager.GetSettlementByNameAndRegion(endName, endRegion);
+
+                        if (start == null)
+                        {
+                            Console.WriteLine($"Origin settlement '{startName} ({startRegion})' not found.");
+                            break;
+                        }
+                        if (end == null)
+                        {
+                            Console.WriteLine($"Destination settlement '{endName} ({endRegion})' not found.");
+                            break;
+                        }
+
+                        RoutePreference preference = ConsoleInput.GetEnumInput<RoutePreference>("Choose route preference:");
+
+                        // Call FindShortestPath which now handles all detailed prompts and calculations
+                        JourneyResult result = pathfinder.FindShortestPath(start, end, preference);
+                        result.DisplayResult(); // Display the result to the console
+
+                        // New: Ask to save the route to file (Patch 3)
+                        if (result.PathFound && ConsoleInput.GetBooleanInput("Would you like to save this route to a local file?"))
+                        {
+                            pathfinder.SaveJourneyResultToFile(result);
+                        }
                         break;
                     case "2":
-                        routeManager.RemoveRoute();
+                        pathfinder.CreateNewCustomLandRoutePlayer(routeManager);
                         break;
                     case "3":
-                        routeManager.EditRoute();
+                        pathfinder.CreateNewCustomSeaRoutePlayer(routeManager);
                         break;
                     case "4":
-                        routeManager.FileValidation();
+                        routeManager.DisplayLoadedData();
                         break;
                     case "5":
-                        routeManager.FileRepair();
-                        break;
-                    case "6":
-                        routeManager.FilePrint();
-                        break;
-                    case "7":
-                        routeManager.FileCheck();
-                        break;
-                    case "8":
-                        string originNameFind = ConsoleInput.GetStringInput("Origin Settlement Name: ");
-                        string originRegionFind = ConsoleInput.GetStringInput("Origin Region Name: ");
-                        Settlement originFind = dataManager.GetSettlementByNameAndRegion(originNameFind, originRegionFind);
-
-                        string destinationNameFind = ConsoleInput.GetStringInput("Destination Settlement Name: ");
-                        string destinationRegionFind = ConsoleInput.GetStringInput("Destination Region Name: ");
-                        Settlement destinationFind = dataManager.GetSettlementByNameAndRegion(destinationNameFind, destinationRegionFind);
-
-                        if (originFind != null && destinationFind != null)
-                        {
-                            pathfinder.FindPath(
-                                origin: originFind,
-                                destination: destinationFind,
-                                numTravelers: ConsoleInput.GetIntInput("Number of travelers: ", 1),
-                                travelSpeed: ConsoleInput.GetStringInput("Travel Speed (Normal, Fast, Slow): "),
-                                shipType: ConsoleInput.GetEnumInput<ShipType>("Select Ship Type:"),
-                                mountType: ConsoleInput.GetEnumInput<MountType>("Select Mount Type:"),
-                                preference: ConsoleInput.GetEnumInput<RoutePreference>("Select Route Preference:")
-                            ).DisplayResult();
-                        }
-                        else
-                        {
-                            Console.WriteLine("Invalid origin or destination settlement entered for pathfinding.");
-                        }
-                        break;
-                    case "0":
-                        dmMenuRunning = false;
-                        Console.WriteLine("Exiting DM Menu.");
+                        playerMenuRunning = false;
+                        Console.WriteLine("Exiting Player Menu.");
                         break;
                     default:
                         Console.WriteLine("Invalid choice. Please try again.");
@@ -151,58 +143,71 @@ namespace YourFantasyWorldProject
             }
         }
 
-        static void RunPlayerMenu(Pathfinder pathfinder, DataManager dataManager, RouteManager routeManager) // Added routeManager parameter
+        static void RunDmMenu(Pathfinder pathfinder, RouteManager routeManager)
         {
-            bool playerMenuRunning = true;
-            while (playerMenuRunning)
+            bool dmMenuRunning = true;
+            while (dmMenuRunning)
             {
-                Console.WriteLine("\n--- Player Menu ---");
-                Console.WriteLine("1. Find Route (Dijkstra's)");
-                Console.WriteLine("2. Create Custom Land Route (Player only)"); // Player can only create custom
-                Console.WriteLine("3. Create Custom Sea Route (Player only)"); // Player can only create custom
-                Console.WriteLine("0. Back to Main Menu");
+                Console.WriteLine("\n--- DM Menu ---");
+                Console.WriteLine("1. Find Route (Full Options)");
+                Console.WriteLine("2. Create New Land Route (Default)");
+                Console.WriteLine("3. Create New Sea Route (Default)");
+                Console.WriteLine("4. View All Settlements & Routes (File Check)");
+                Console.WriteLine("5. Rebuild Graph (if underlying files changed manually)");
+                Console.WriteLine("6. Return to Main Menu");
 
                 string choice = ConsoleInput.GetStringInput("Enter your choice: ");
 
                 switch (choice)
                 {
                     case "1":
-                        string originNamePlayer = ConsoleInput.GetStringInput("Origin Settlement Name: ");
-                        string originRegionPlayer = ConsoleInput.GetStringInput("Origin Region Name: ");
-                        Settlement originPlayer = dataManager.GetSettlementByNameAndRegion(originNamePlayer, originRegionPlayer);
+                        Console.WriteLine("\n--- Find Route (DM Full Options) ---");
+                        string startName = ConsoleInput.GetStringInput("Enter origin settlement name: ");
+                        string startRegion = ConsoleInput.GetStringInput("Enter origin region name: ");
+                        Settlement start = routeManager.GetSettlementByNameAndRegion(startName, startRegion);
 
-                        string destinationNamePlayer = ConsoleInput.GetStringInput("Destination Settlement Name: ");
-                        string destinationRegionPlayer = ConsoleInput.GetStringInput("Destination Region Name: ");
-                        Settlement destinationPlayer = dataManager.GetSettlementByNameAndRegion(destinationNamePlayer, destinationRegionPlayer);
+                        string endName = ConsoleInput.GetStringInput("Enter destination settlement name: ");
+                        string endRegion = ConsoleInput.GetStringInput("Enter destination region name: ");
+                        Settlement end = routeManager.GetSettlementByNameAndRegion(endName, endRegion);
 
-                        if (originPlayer != null && destinationPlayer != null)
+                        if (start == null)
                         {
-                            pathfinder.FindPath(
-                                origin: originPlayer,
-                                destination: destinationPlayer,
-                                numTravelers: ConsoleInput.GetIntInput("Number of travelers: ", 1),
-                                travelSpeed: ConsoleInput.GetStringInput("Travel Speed (Normal, Fast, Slow): "),
-                                shipType: ConsoleInput.GetEnumInput<ShipType>("Select Ship Type:"),
-                                mountType: ConsoleInput.GetEnumInput<MountType>("Select Mount Type:"),
-                                preference: ConsoleInput.GetEnumInput<RoutePreference>("Select Route Preference:")
-                            ).DisplayResult();
+                            Console.WriteLine($"Origin settlement '{startName} ({startRegion})' not found.");
+                            break;
                         }
-                        else
+                        if (end == null)
                         {
-                            Console.WriteLine("Invalid origin or destination settlement entered for pathfinding.");
+                            Console.WriteLine($"Destination settlement '{endName} ({endRegion})' not found.");
+                            break;
+                        }
+
+                        RoutePreference preference = ConsoleInput.GetEnumInput<RoutePreference>("Choose route preference:");
+
+                        // Call FindShortestPath which now handles all detailed prompts and calculations
+                        JourneyResult result = pathfinder.FindShortestPath(start, end, preference);
+                        result.DisplayResult(); // Display the result to the console
+
+                        // New: Ask to save the route to file (Patch 3)
+                        if (result.PathFound && ConsoleInput.GetBooleanInput("Would you like to save this route to a local file?"))
+                        {
+                            pathfinder.SaveJourneyResultToFile(result);
                         }
                         break;
                     case "2":
-                        pathfinder.CreatePlayerCustomLandRoute(); // New method for player-only custom land route
-                        routeManager.RebuildGraph(); // Rebuild graph to include new player custom route
+                        pathfinder.CreateNewLandRouteDm(routeManager);
                         break;
                     case "3":
-                        pathfinder.CreatePlayerCustomSeaRoute(); // New method for player-only custom sea route
-                        routeManager.RebuildGraph(); // Rebuild graph to include new player custom route
+                        pathfinder.CreateNewSeaRouteDm(routeManager);
                         break;
-                    case "0":
-                        playerMenuRunning = false;
-                        Console.WriteLine("Exiting Player Menu.");
+                    case "4":
+                        routeManager.FileCheck(); // Displays loaded data summary
+                        break;
+                    case "5":
+                        routeManager.RebuildGraph(); // Manually trigger graph rebuild from current files
+                        break;
+                    case "6":
+                        dmMenuRunning = false;
+                        Console.WriteLine("Exiting DM Menu.");
                         break;
                     default:
                         Console.WriteLine("Invalid choice. Please try again.");
@@ -239,7 +244,8 @@ namespace YourFantasyWorldProject
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error loading DM password from file: {ex.Message}.");
+                Console.WriteLine($"Error loading DM password from file: {ex.Message}.\n" +
+                                  $"Please ensure '{DmPasswordFilePath}' is accessible in the application's root directory.");
                 return null;
             }
         }

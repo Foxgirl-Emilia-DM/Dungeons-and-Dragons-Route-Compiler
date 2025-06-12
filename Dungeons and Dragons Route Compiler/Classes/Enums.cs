@@ -16,16 +16,20 @@ namespace YourFantasyWorldProject.Classes
         Keelboat,   // 2 mph
         Longship,   // 3 mph
         Galley,     // 4 mph (often rowed for max speed)
-        SailingShip // 2 mph
+        SailingShip, // 2 mph
+        Warship     // 5 mph (New: Added for specific scenarios)
     }
 
     // Defines different types of mounts and their typical speeds
     public enum MountType
     {
-        None,           // For unmounted travel
+        None,           // For unmounted travel or when no specific mount is chosen
+        Foot,           // 3 mph (Added explicitly for clarity of unmounted travel)
+        DraftHorse,     // 3 mph (New: Added for drawing wagons/carriages)
         RidingHorse,    // 6 mph
-        Warhorse        // 6 mph
-        // Add more mounts as needed
+        Warhorse,       // 6 mph
+        Pony,           // 4 mph (New: Added)
+        Mastiff         // 3 mph (New: Added)
     }
 
     // Defines user preference for route finding

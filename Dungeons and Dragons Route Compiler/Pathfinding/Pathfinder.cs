@@ -6,6 +6,8 @@ using YourFantasyWorldProject.Classes; // For Settlement, LandRoute, SeaRoute, E
 using YourFantasyWorldProject.Managers;
 using YourFantasyWorldProject.Utils; // For ConsoleInput
 using System.Globalization; // For TextInfo
+using System.IO; // For Path, File
+using System.Text; // For Encoding
 
 namespace YourFantasyWorldProject.Pathfinding
 {
@@ -16,15 +18,67 @@ namespace YourFantasyWorldProject.Pathfinding
 
         // Constants for D&D 5e speed conversions
         private const double MPH_TO_KMH_FACTOR = 1.60934;
-        private const double NORMAL_WALK_MPH = 3;
-        private const double FAST_WALK_MPH = 4;
-        private const double SLOW_WALK_MPH = 2;
+        private const double NORMAL_WALK_MPH = 3; // Default foot travel speed
 
         // Resource consumption rates (per person per day)
         private const double RATIONS_PER_PERSON_PER_DAY = 1;
-        private const double WATER_PER_PERSON_PER_DAY_LAND = 1; // Liters
-        private const double WATER_PER_PERSON_PER_DAY_SEA = 2; // Liters (less access to fresh water)
+        private const double RATION_COST_GOLD_PER_DAY = 0.5; // 5 silver pieces = 0.5 gold
 
+        private const double WATER_PER_PERSON_PER_DAY_LAND = 1; // Liters
+        private const double WATER_PER_PERSON_PER_DAY_SEA_OR_DESERT = 2; // Liters (less access to fresh water / hot conditions)
+        private const double WATER_COST_GOLD_PER_LITER = 0.01; // Example: 0.1 gold per 10 liters, so 0.01 per liter
+
+        // Mount speeds (in MPH)
+        private static readonly Dictionary<MountType, double> _mountSpeedsMph = new Dictionary<MountType, double>
+        {
+            { MountType.None, 0 }, // Handled by walk speeds
+            { MountType.Foot, 3 }, // 3 mph is 24 miles per day at 8 hours, or 32 miles per day at 10 hours
+            { MountType.DraftHorse, 3 }, // Slower due to pulling capacity
+            { MountType.RidingHorse, 6 }, // Typical riding horse speed
+            { MountType.Warhorse, 6 },
+            { MountType.Pony, 4 },
+            { MountType.Mastiff, 3 } // Can be mounted by small creatures
+        };
+
+        // Ship speeds (in MPH)
+        private static readonly Dictionary<ShipType, double> _shipSpeedsMph = new Dictionary<ShipType, double>
+        {
+            { ShipType.None, 0 },
+            { ShipType.Rowboat, 1.5 },
+            { ShipType.Keelboat, 2 },
+            { ShipType.Longship, 3 },
+            { ShipType.Galley, 4 },
+            { ShipType.SailingShip, 2 }, // Assumes average sailing conditions
+            { ShipType.Warship, 5 } // A faster, dedicated warship
+        };
+
+        // Mount carrying/drawing capacities (lbs)
+        private static readonly Dictionary<MountType, double> _mountDrawingCapacityLbs = new Dictionary<MountType, double>
+        {
+            { MountType.DraftHorse, 540 },
+            { MountType.RidingHorse, 480 },
+            { MountType.Warhorse, 540 },
+            { MountType.Pony, 225 },
+            { MountType.Mastiff, 195 } // For small riders/cargo
+        };
+
+        // Mount costs per day (gold)
+        private static readonly Dictionary<MountType, double> _mountCostsPerDayGold = new Dictionary<MountType, double>
+        {
+            { MountType.DraftHorse, 50 },
+            { MountType.RidingHorse, 75 },
+            { MountType.Warhorse, 400 },
+            { MountType.Pony, 30 },
+            { MountType.Mastiff, 25 }
+        };
+
+        private const double ANIMAL_FEED_COST_GOLD_PER_DAY_PER_ANIMAL = 0.05; // 5 copper pieces per day per animal
+
+        // Vehicle costs and weights
+        private const double WAGON_WEIGHT_LBS = 400;
+        private const double WAGON_COST_GOLD = 35;
+        private const double CARRIAGE_WEIGHT_LBS = 600;
+        private const double CARRIAGE_COST_GOLD = 100;
 
         public Pathfinder(DataManager dataManager)
         {
@@ -35,104 +89,83 @@ namespace YourFantasyWorldProject.Pathfinding
         // Represents an edge in our graph
         private class Edge
         {
-            public Settlement Destination { get; }
-            public double Weight { get; } // Represents time or cost, depending on the algorithm's goal
+            public Settlement Target { get; }
+            public double Distance { get; } // Distance in KM
+            public RouteType Type { get; }
             public IRoute Route { get; } // Reference to the actual route object
 
-            public Edge(Settlement destination, double weight, IRoute route)
+            public Edge(Settlement target, double distance, RouteType type, IRoute route)
             {
-                Destination = destination;
-                Weight = weight;
+                Target = target;
+                Distance = distance;
+                Type = type;
                 Route = route;
             }
         }
 
         /// <summary>
-        /// Builds the graph from the provided land and sea routes.
-        /// This method should be called whenever route data changes.
+        /// Clears the current graph.
+        /// </summary>
+        public void ClearGraph()
+        {
+            _graph.Clear();
+        }
+
+        /// <summary>
+        /// Builds the graph from a list of land and sea routes.
         /// </summary>
         public void BuildGraph(List<LandRoute> landRoutes, List<SeaRoute> seaRoutes)
         {
-            _graph.Clear(); // Clear existing graph before rebuilding
+            ClearGraph(); // Clear existing graph before rebuilding
 
-            // Add all settlements to the graph first to ensure all nodes exist
-            HashSet<Settlement> allSettlements = new HashSet<Settlement>();
-            foreach (var route in landRoutes)
+            // Add all settlements to the graph to ensure they are keys, even if isolated
+            foreach (var route in landRoutes.Cast<IRoute>().Concat(seaRoutes))
             {
-                allSettlements.Add(route.Origin);
-                allSettlements.Add(route.Destination);
-            }
-            foreach (var route in seaRoutes)
-            {
-                allSettlements.Add(route.Origin);
-                allSettlements.Add(route.Destination);
-            }
-
-            foreach (var settlement in allSettlements)
-            {
-                if (!_graph.ContainsKey(settlement))
+                if (!_graph.ContainsKey(route.Origin))
                 {
-                    _graph[settlement] = new List<Edge>();
+                    _graph[route.Origin] = new List<Edge>();
+                }
+                if (!_graph.ContainsKey(route.Destination))
+                {
+                    _graph[route.Destination] = new List<Edge>();
                 }
             }
 
-
-            // Add land routes to the graph
+            // Add land routes
             foreach (var route in landRoutes)
             {
-                // Ensure origin and destination settlements are in the graph dictionary
-                if (!_graph.ContainsKey(route.Origin)) _graph[route.Origin] = new List<Edge>();
-                if (!_graph.ContainsKey(route.Destination)) _graph[route.Destination] = new List<Edge>();
-
-                double baseTimeHours = route.TotalDistance / (NORMAL_WALK_MPH * MPH_TO_KMH_FACTOR);
-
-                // Add forward route A -> B
-                _graph[route.Origin].Add(new Edge(route.Destination, baseTimeHours, route));
-                // Add reverse route B -> A (assuming land routes are bidirectional)
-                _graph[route.Destination].Add(new Edge(route.Origin, baseTimeHours, route));
+                // Add forward route
+                _graph[route.Origin].Add(new Edge(route.Destination, route.TotalDistance, RouteType.Land, route));
             }
 
-            // Add sea routes to the graph
+            // Add sea routes
             foreach (var route in seaRoutes)
             {
-                // Ensure origin and destination settlements are in the graph dictionary
-                if (!_graph.ContainsKey(route.Origin)) _graph[route.Origin] = new List<Edge>();
-                if (!_graph.ContainsKey(route.Destination)) _graph[route.Destination] = new List<Edge>();
-
-                // Calculate base time for the sea route. Using a default ship speed for graph building.
-                // The actual calculation for pathfinding will use the selected shipType.
-                // For graph building, we can use a representative speed, e.g., SailingShip's speed.
-                double representativeShipSpeedMph = 2; // SailingShip speed
-                double baseTimeHours = route.Distance / (representativeShipSpeedMph * MPH_TO_KMH_FACTOR);
-
-                // Add forward route X -> Y
-                _graph[route.Origin].Add(new Edge(route.Destination, baseTimeHours, route));
-                // Add reverse route Y -> X (assuming sea routes are also bidirectional)
-                _graph[route.Destination].Add(new Edge(route.Origin, baseTimeHours, route));
+                // Add forward route
+                _graph[route.Origin].Add(new Edge(route.Destination, route.Distance, RouteType.Sea, route));
             }
-
-            Console.WriteLine($"Graph built with {_graph.Count} settlements and {_graph.Sum(kv => kv.Value.Count)} routes.");
         }
 
-
         /// <summary>
-        /// Finds the shortest path between two settlements using Dijkstra's algorithm.
-        /// Considers different travel speeds and biome modifiers.
+        /// Finds the shortest path between two settlements using Dijkstra's algorithm,
+        /// and then calculates detailed journey costs based on user inputs.
         /// </summary>
-        public JourneyResult FindPath(
-            Settlement origin, Settlement destination,
-            int numTravelers,
-            string travelSpeed, ShipType shipType, MountType mountType,
-            RoutePreference preference)
+        /// <param name="startSettlement">The origin settlement.</param>
+        /// <param name="endSettlement">The destination settlement.</param>
+        /// <param name="routePreference">User's preference for route types (LandOnly, SeaOnly, Mixed).</param>
+        /// <returns>A JourneyResult object containing path details, time, and costs.</returns>
+        public JourneyResult FindShortestPath(Settlement startSettlement, Settlement endSettlement, RoutePreference routePreference)
         {
-            if (!_graph.ContainsKey(origin) || !_graph.ContainsKey(destination))
+            // Input validation
+            if (!_graph.ContainsKey(startSettlement) || !_graph.ContainsKey(endSettlement))
             {
-                Console.WriteLine("Origin or destination settlement not found in the graph.");
-                return new JourneyResult(origin, destination, null, null);
+                Console.WriteLine("One or both settlements not found in the loaded world data.");
+                return new JourneyResult(startSettlement, endSettlement, null, null, 0, MountType.None, ShipType.None, "none", 0, 0, 0, 0, 0, false, false);
             }
 
+            // Dijkstra's algorithm setup
             var distances = new Dictionary<Settlement, double>();
-            var previous = new Dictionary<Settlement, IRoute>();
+            var previous = new Dictionary<Settlement, IRoute>(); // Stores the route object used to reach this settlement
             var priorityQueue = new MinHeap<Settlement>();
 
             foreach (var settlement in _graph.Keys)
@@ -141,280 +174,355 @@ namespace YourFantasyWorldProject.Pathfinding
                 previous[settlement] = null;
             }
 
-            distances[origin] = 0;
-            priorityQueue.Enqueue(origin, 0);
+            distances[startSettlement] = 0;
+            priorityQueue.Enqueue(startSettlement, 0);
+
+            HashSet<Settlement> visited = new HashSet<Settlement>();
 
             while (priorityQueue.Count > 0)
             {
                 Settlement current = priorityQueue.Dequeue();
 
-                if (current.Equals(destination))
+                if (current.Equals(endSettlement))
                 {
-                    break;
+                    break; // Path found
                 }
 
-                if (!_graph.ContainsKey(current))
+                if (visited.Contains(current))
                 {
                     continue;
                 }
+                visited.Add(current);
 
-                foreach (var edge in _graph[current])
+                // Check neighbors
+                if (_graph.TryGetValue(current, out List<Edge> edges))
                 {
-                    // Ensure the route type matches the preference
-                    if (preference == RoutePreference.LandOnly && edge.Route is SeaRoute) continue;
-                    if (preference == RoutePreference.SeaOnly && edge.Route is LandRoute) continue;
-
-                    double timeCost = 0;
-                    // The 'edge.Route' here is the actual route object (LandRoute or SeaRoute)
-                    // We need to ensure the origin and destination of the 'edge.Route' match
-                    // the current segment being evaluated to correctly calculate time and cost.
-                    // This is crucial because a 'route' object might be added as a reverse edge.
-                    // When traversing from current to edge.Destination, we use the route whose Origin is 'current'
-                    // and Destination is 'edge.Destination'.
-                    // If the stored 'route' in the edge is the *reverse* route, we need to make sure the
-                    // calculations are based on the correct direction.
-                    // For simplicity, we can assume that edge.Route.Origin is always 'current' and edge.Route.Destination is 'edge.Destination'
-                    // for the purpose of time/cost calculation in Dijkstra's, as the graph has symmetric edges.
-                    // The critical part is that the JourneySegment correctly reflects the 'segmentStart' and 'segmentEnd'.
-
-                    // Determine the actual segment start and end for the purpose of cost calculation
-                    // This is important because 'edge.Route' might be the *reversed* route.
-                    Settlement actualSegmentOrigin;
-                    Settlement actualSegmentDestination;
-                    IRoute actualRouteToUse;
-
-                    // If the edge's route origin matches the current node, use it directly.
-                    if (edge.Route.Origin.Equals(current) && edge.Route.Destination.Equals(edge.Destination))
+                    foreach (var edge in edges)
                     {
-                        actualRouteToUse = edge.Route;
-                        actualSegmentOrigin = current;
-                        actualSegmentDestination = edge.Destination;
-                    }
-                    // Otherwise, it's the reverse of the stored route. Create a temporary "reversed" route
-                    // for accurate calculation if necessary, or just use the properties assuming symmetry.
-                    // For now, we can assume the cost/time calculation functions handle directionality
-                    // by just taking the route object. The distance and biome/ship info are route properties.
-                    else
-                    {
-                        // This case handles when edge.Route is the reverse (e.g., if we added B->A but stored A->B route object)
-                        // It's still valid to use the route object's properties for distance/biomes/type.
-                        actualRouteToUse = edge.Route;
-                        actualSegmentOrigin = current; // This edge is from 'current'
-                        actualSegmentDestination = edge.Destination; // To 'edge.Destination'
-                    }
+                        // Apply route preference filtering
+                        if ((routePreference == RoutePreference.LandOnly && edge.Type == RouteType.Sea) ||
+                            (routePreference == RoutePreference.SeaOnly && edge.Type == RouteType.Land))
+                        {
+                            continue; // Skip routes that don't match preference
+                        }
 
+                        double newDist = distances[current] + edge.Distance; // Initial distance, will be adjusted later for actual travel time/cost
 
-                    double routeDistance = 0; // Initialize for segment calculation
-                    List<string> biomesTraversed = new List<string>(); // Initialize for land routes
-
-                    if (actualRouteToUse is LandRoute landRoute)
-                    {
-                        routeDistance = landRoute.TotalDistance;
-                        biomesTraversed = landRoute.Biomes;
-                        timeCost = CalculateLandRouteTimeAndCost(landRoute, travelSpeed, mountType, numTravelers, out _);
-                    }
-                    else if (actualRouteToUse is SeaRoute seaRoute)
-                    {
-                        routeDistance = seaRoute.Distance;
-                        timeCost = CalculateSeaRouteTimeAndCost(seaRoute, shipType, numTravelers, out _);
-                    }
-
-                    double newDist = distances[current] + timeCost;
-
-                    if (newDist < distances[edge.Destination])
-                    {
-                        distances[edge.Destination] = newDist;
-                        previous[edge.Destination] = actualRouteToUse; // Store the route that led to this path
-                        priorityQueue.Enqueue(edge.Destination, newDist);
+                        if (newDist < distances[edge.Target])
+                        {
+                            distances[edge.Target] = newDist;
+                            previous[edge.Target] = edge.Route; // Store the route itself
+                            priorityQueue.Enqueue(edge.Target, newDist);
+                        }
                     }
                 }
             }
 
+            // Reconstruct path
             List<JourneySegment> pathSegments = new List<JourneySegment>();
-            List<ResourceCost> estimatedResourceCosts = new List<ResourceCost>();
-            double totalRations = 0;
-            double totalWaterLand = 0;
-            double totalWaterSea = 0;
-
-            if (previous[destination] == null && !origin.Equals(destination))
+            if (previous[endSettlement] == null && !startSettlement.Equals(endSettlement))
             {
-                return new JourneyResult(origin, destination, null, null);
+                Console.WriteLine("No path found (during pathfinding phase).");
+                return new JourneyResult(startSettlement, endSettlement, null, null, 0, MountType.None, ShipType.None, "none", 0, 0, 0, 0, 0, false, false);
             }
 
-            // Reconstruct path: start from destination and go backward using 'previous' dictionary
-            Settlement pathCurrent = destination;
-            // Use a Stack to build the path in reverse and then pop to get it in correct order
-            Stack<JourneySegment> segmentsStack = new Stack<JourneySegment>();
-
-            while (pathCurrent != null && !pathCurrent.Equals(origin))
+            Settlement step = endSettlement;
+            while (!step.Equals(startSettlement) && previous[step] != null)
             {
-                IRoute route = previous[pathCurrent];
-                if (route == null) break; // Should not happen if pathFound is true
+                IRoute route = previous[step];
+                Settlement originOfRoute = route.Origin.Equals(step) ? route.Destination : route.Origin; // Determine actual origin of this segment in the path reconstruction
 
-                // Determine the correct start and end for this segment
-                // Because graph edges are symmetrical, the route object we retrieved (previous[pathCurrent])
-                // might have its origin as the *true* origin of the route, and its destination as the *true* destination.
-                // However, in the context of traversing *backwards* from 'pathCurrent', the 'segmentStart'
-                // is the settlement that led to 'pathCurrent' via 'route'.
-                Settlement segmentEnd = pathCurrent;
-                Settlement segmentStart = route.Origin.Equals(pathCurrent) ? route.Destination : route.Origin;
-
-                // If segmentStart is null, it means the path reconstruction failed.
-                if (segmentStart == null) break;
-
-                double segmentTimeHours;
-                double segmentCost;
-                double segmentDistance;
-                List<string> biomes = new List<string>();
-
-
-                if (route is LandRoute landRouteSegment)
+                // If the reconstructed route goes Destination -> Origin, swap for consistent segment representation
+                if (!originOfRoute.Equals(startSettlement) && !originOfRoute.Equals(pathSegments.FirstOrDefault()?.Start ?? endSettlement))
                 {
-                    segmentDistance = landRouteSegment.TotalDistance;
-                    biomes = landRouteSegment.Biomes;
-                    segmentTimeHours = CalculateLandRouteTimeAndCost(landRouteSegment, travelSpeed, mountType, numTravelers, out segmentCost);
-                    totalRations += (segmentTimeHours / 24) * RATIONS_PER_PERSON_PER_DAY * numTravelers;
-                    totalWaterLand += (segmentTimeHours / 24) * WATER_PER_PERSON_PER_DAY_LAND * numTravelers;
-                }
-                else if (route is SeaRoute seaRouteSegment)
-                {
-                    segmentDistance = seaRouteSegment.Distance;
-                    segmentTimeHours = CalculateSeaRouteTimeAndCost(seaRouteSegment, shipType, numTravelers, out segmentCost);
-                    totalRations += (segmentTimeHours / 24) * RATIONS_PER_PERSON_PER_DAY * numTravelers;
-                    totalWaterSea += (segmentTimeHours / 24) * WATER_PER_PERSON_PER_DAY_SEA * numTravelers;
+                    // This means the route pulled from 'previous' is the reverse of what we need for this segment.
+                    // Swap origin and destination to reflect the forward movement in the path.
+                    var actualOrigin = route.Destination.Equals(step) ? route.Origin : route.Destination;
+                    var actualDestination = route.Origin.Equals(step) ? route.Destination : route.Origin;
+                    route = (route is LandRoute tempLandRoute) ? new LandRoute(actualOrigin, actualDestination, tempLandRoute.Biomes, tempLandRoute.BiomeDistances, tempLandRoute.IsMapped) :
+                            (route is SeaRoute sr) ? new SeaRoute(actualOrigin, actualDestination, sr.Distance) : route;
+
+                    step = actualOrigin;
                 }
                 else
                 {
-                    segmentTimeHours = 0;
-                    segmentCost = 0;
-                    segmentDistance = 0;
+                    step = originOfRoute;
                 }
 
-                // Add the segment to the stack (it will be reversed later)
-                segmentsStack.Push(new JourneySegment(segmentStart, segmentEnd, segmentDistance, segmentTimeHours, segmentCost, route, biomes));
-                pathCurrent = segmentStart;
+                double segmentDistance = (route is LandRoute currentSegmentRoute) ? currentSegmentRoute.TotalDistance : (route as SeaRoute).Distance;
+                List<string> biomesTraversed = (route is LandRoute routeBiomes) ? routeBiomes.Biomes : new List<string>();
+
+                pathSegments.Insert(0, new JourneySegment(route.Origin, route.Destination, segmentDistance, 0, 0, route, biomesTraversed)); // Time and Cost are initially 0, will be calculated later
             }
 
-            // Pop segments from stack to get them in correct order (Origin -> Destination)
-            while (segmentsStack.Count > 0)
+
+            // --- Patch 2 & 3: Detailed Journey Calculation ---
+
+            // 1. Get number of travelers
+            int numTravelers = ConsoleInput.GetIntInput("Enter the number of travelers:", 1);
+
+            // 2. Determine transport types
+            MountType chosenLandTransport = MountType.None;
+            ShipType chosenSeaTransport = ShipType.None;
+            string vehicleChoice = "none";
+            List<double> travelerWeights = new List<double>();
+
+            bool hasLandSegments = pathSegments.Any(s => s.RouteUsed is LandRoute);
+            bool hasSeaSegments = pathSegments.Any(s => s.RouteUsed is SeaRoute);
+
+            if (hasLandSegments)
             {
-                pathSegments.Add(segmentsStack.Pop());
+                chosenLandTransport = ConsoleInput.GetEnumInput<MountType>("Choose your land transport type:");
+            }
+            if (hasSeaSegments)
+            {
+                chosenSeaTransport = ConsoleInput.GetEnumInput<ShipType>("Choose your sea transport type:");
             }
 
-            if (totalRations > 0) estimatedResourceCosts.Add(new ResourceCost("Rations", totalRations));
-            if (totalWaterLand > 0) estimatedResourceCosts.Add(new ResourceCost("Water (Land)", totalWaterLand));
-            if (totalWaterSea > 0) estimatedResourceCosts.Add(new ResourceCost("Water (Sea)", totalWaterSea));
+            // 3. Ask for daily travel hours
+            double travelHoursPerDay = ConsoleInput.GetDoubleInput("Enter how many hours you intend to travel per day (e.g., 8, 10, 12):", 1);
+            if (travelHoursPerDay > 8)
+            {
+                Console.WriteLine("\n*** WARNING: Traveling more than 8 hours per day is considered a forced march! ***");
+                Console.WriteLine("    This may incur penalties (e.g., exhaustion, reduced movement speed in official D&D rules) not explicitly modeled here.");
+            }
+
+            // 4. Vehicle and Traveler Weight Input (if land transport is mounted)
+            double totalTravelerWeightLbs = 0;
+            double vehicleWeight = 0;
+            double baseVehicleCost = 0; // Cost before ownership
+            bool ownsVehicle = false; // New: Patch 3
+
+            if (chosenLandTransport != MountType.None && chosenLandTransport != MountType.Foot)
+            {
+                vehicleChoice = ConsoleInput.GetStringInput("Do you intend to use a wagon, carriage, or neither? (wagon/carriage/none): ").ToLowerInvariant();
+                switch (vehicleChoice)
+                {
+                    case "wagon":
+                        vehicleWeight = WAGON_WEIGHT_LBS;
+                        baseVehicleCost = WAGON_COST_GOLD;
+                        break;
+                    case "carriage":
+                        vehicleWeight = CARRIAGE_WEIGHT_LBS;
+                        baseVehicleCost = CARRIAGE_COST_GOLD;
+                        break;
+                    default:
+                        vehicleChoice = "none";
+                        break;
+                }
+
+                if (!string.IsNullOrEmpty(vehicleChoice) && vehicleChoice != "none")
+                {
+                    ownsVehicle = ConsoleInput.GetBooleanInput($"Do you own the {vehicleChoice}?");
+                }
+
+                Console.WriteLine("\nEnter combined body weight and carry weight for each traveler (in pounds).");
+                for (int i = 0; i < numTravelers; i++)
+                {
+                    double weight = ConsoleInput.GetDoubleInput($"Traveler {i + 1} weight (lbs): ", 0);
+                    travelerWeights.Add(weight);
+                    totalTravelerWeightLbs += weight;
+                }
+            }
+
+            bool ownsMounts = false; // New: Patch 3
+            if (chosenLandTransport != MountType.None && chosenLandTransport != MountType.Foot && hasLandSegments)
+            {
+                ownsMounts = ConsoleInput.GetBooleanInput($"Do you own the {chosenLandTransport}(s) used for travel?");
+            }
+
+            // Calculate initial vehicle cost based on ownership
+            double actualVehicleCost = ownsVehicle ? 0 : baseVehicleCost;
 
 
-            return new JourneyResult(origin, destination, pathSegments, estimatedResourceCosts);
+            // 5. Calculate detailed time, cost, and resources for each segment
+            double totalJourneyDistanceKm = 0;
+            double totalJourneyTimeHours = 0;
+            double totalJourneyCostGold = actualVehicleCost; // Start with actual vehicle cost
+
+            double totalRationsAcrossJourney = 0;
+            double totalWaterAcrossJourney = 0;
+
+            int overallNumberOfMountsNeeded = 0; // To store the max mounts needed across all land segments
+
+            List<JourneySegment> finalPathSegments = new List<JourneySegment>();
+
+            foreach (var segment in pathSegments)
+            {
+                double effectiveSpeedKmh = 0;
+                double biomeMultiplier = 1.0;
+                List<string> biomesInSegment = new List<string>();
+
+                // Determine base speed based on route type and chosen transport
+                if (segment.RouteUsed is LandRoute landRouteSegment)
+                {
+                    effectiveSpeedKmh = _mountSpeedsMph[chosenLandTransport] * MPH_TO_KMH_FACTOR;
+                    biomesInSegment = landRouteSegment.Biomes;
+
+                    // Apply biome difficulty multipliers for land routes
+                    double segmentBiomeFactor = 1.0;
+                    foreach (var biome in landRouteSegment.Biomes)
+                    {
+                        segmentBiomeFactor *= BiomeModifier.GetMultiplier(biome);
+                    }
+                    biomeMultiplier = segmentBiomeFactor; // This will be applied to the distance or time
+                }
+                else if (segment.RouteUsed is SeaRoute sr)
+                {
+                    effectiveSpeedKmh = _shipSpeedsMph[chosenSeaTransport] * MPH_TO_KMH_FACTOR;
+                }
+
+                // If somehow speed is 0 or unchosen for a segment type, use a default walk speed
+                if (effectiveSpeedKmh == 0 && segment.RouteUsed is LandRoute)
+                {
+                    effectiveSpeedKmh = NORMAL_WALK_MPH * MPH_TO_KMH_FACTOR; // Fallback to foot speed for land
+                }
+                else if (effectiveSpeedKmh == 0 && segment.RouteUsed is SeaRoute)
+                {
+                    Console.WriteLine($"Warning: No ship chosen for sea segment from {segment.Start.Name} to {segment.End.Name}. Assuming slowest sea speed (Rowboat).");
+                    effectiveSpeedKmh = _shipSpeedsMph[ShipType.Rowboat] * MPH_TO_KMH_FACTOR; // Fallback for sea
+                }
+                else if (effectiveSpeedKmh == 0) // Should not happen with fallbacks, but safety
+                {
+                    Console.WriteLine($"Warning: Zero effective speed for segment from {segment.Start.Name} to {segment.End.Name}. Setting to a default.");
+                    effectiveSpeedKmh = 1.0; // Minimal speed to prevent division by zero
+                }
+
+
+                // Calculate segment time (adjusted by biome multiplier)
+                // If biome multiplier > 1, it means the terrain is harder, effectively increasing travel time for the same distance.
+                // So, time = (distance * biomeMultiplier) / effectiveSpeedKmh
+                double segmentTimeHours = (segment.DistanceKm * biomeMultiplier) / effectiveSpeedKmh;
+
+                // Calculate segment cost (just placeholder for now, actual costs calculated below)
+                double segmentCost = 0; // Segment cost will be accumulated
+
+                // Resource Consumption per segment
+                double segmentDays = segmentTimeHours / travelHoursPerDay;
+                if (segmentDays < 0.001 && segment.DistanceKm > 0) segmentDays = 0.001; // Ensure at least a minimal day if distance > 0 to account for resources
+
+                double rationsForSegment = RATIONS_PER_PERSON_PER_DAY * numTravelers * segmentDays;
+                totalRationsAcrossJourney += rationsForSegment;
+
+                double waterPerPersonForSegment = WATER_PER_PERSON_PER_DAY_LAND;
+                if (segment.RouteUsed is SeaRoute || biomesInSegment.Any(b => b.ToUpperInvariant().Contains("DESERT")))
+                {
+                    waterPerPersonForSegment = WATER_PER_PERSON_PER_DAY_SEA_OR_DESERT;
+                }
+                double waterForSegment = waterPerPersonForSegment * numTravelers * segmentDays;
+                totalWaterAcrossJourney += waterForSegment;
+
+                // Mount & Vehicle Costs for land segments (apply ownership logic)
+                double segmentMountCost = 0;
+                double segmentFeedCost = 0;
+                int currentSegmentMountsNeeded = 0;
+
+                if (segment.RouteUsed is LandRoute && chosenLandTransport != MountType.None && chosenLandTransport != MountType.Foot)
+                {
+                    double mountCapacity = 0;
+                    if (_mountDrawingCapacityLbs.TryGetValue(chosenLandTransport, out mountCapacity))
+                    {
+                        double totalLoad = totalTravelerWeightLbs + vehicleWeight;
+                        if (totalLoad > 0 && mountCapacity > 0)
+                        {
+                            currentSegmentMountsNeeded = (int)Math.Ceiling(totalLoad / mountCapacity);
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Warning: Drawing capacity not defined for {chosenLandTransport}. Assuming 1 mount per person if mounted.");
+                        currentSegmentMountsNeeded = numTravelers > 0 ? numTravelers : 1; // Fallback
+                    }
+
+                    // Update overall max mounts needed
+                    if (currentSegmentMountsNeeded > overallNumberOfMountsNeeded)
+                    {
+                        overallNumberOfMountsNeeded = currentSegmentMountsNeeded;
+                    }
+
+                    // Apply mount cost ONLY if mounts are NOT owned
+                    if (!ownsMounts)
+                    {
+                        if (_mountCostsPerDayGold.TryGetValue(chosenLandTransport, out double mountDailyCost))
+                        {
+                            segmentMountCost = currentSegmentMountsNeeded * mountDailyCost * segmentDays;
+                        }
+                    }
+
+                    segmentFeedCost = currentSegmentMountsNeeded * ANIMAL_FEED_COST_GOLD_PER_DAY_PER_ANIMAL * segmentDays;
+                }
+
+                segmentCost = segmentMountCost + segmentFeedCost; // Only include direct travel costs here, resources are separate
+
+                totalJourneyDistanceKm += segment.DistanceKm;
+                totalJourneyTimeHours += segmentTimeHours;
+                totalJourneyCostGold += segmentCost;
+
+                finalPathSegments.Add(new JourneySegment(segment.Start, segment.End, segment.DistanceKm, segmentTimeHours, segmentCost, segment.RouteUsed, biomesInSegment));
+            }
+
+            // Final cost calculation for resources (apply rounding)
+            double totalRationCost = Math.Ceiling(totalRationsAcrossJourney) * RATION_COST_GOLD_PER_DAY;
+            // Round water consumption cost up to the nearest multiple of 10.
+            double roundedWaterLiters = Math.Ceiling(totalWaterAcrossJourney);
+            double waterCostRoundedUpToNearestTen = Math.Ceiling(roundedWaterLiters / 10.0) * 10;
+            double totalWaterCost = waterCostRoundedUpToNearestTen * WATER_COST_GOLD_PER_LITER;
+
+            totalJourneyCostGold += totalRationCost + totalWaterCost;
+
+
+            JourneyResult result = new JourneyResult(
+                startSettlement, endSettlement, finalPathSegments, new List<ResourceCost>(), // EstimatedResourceCosts not used this way
+                numTravelers, chosenLandTransport, chosenSeaTransport, vehicleChoice,
+                overallNumberOfMountsNeeded, totalRationsAcrossJourney, totalWaterAcrossJourney, travelHoursPerDay,
+                totalTravelerWeightLbs, ownsMounts, ownsVehicle // New: Patch 3 ownership flags
+            );
+
+            // Update the totals in the JourneyResult object
+            result.UpdateTotals(totalJourneyDistanceKm, totalJourneyTimeHours, totalJourneyCostGold, totalRationsAcrossJourney, totalWaterAcrossJourney);
+
+            return result;
         }
 
         /// <summary>
-        /// Calculates the time and cost for a land route segment, considering biomes, speed, and mounts.
+        /// Saves the detailed journey result to a local .txt file on the user's desktop.
         /// </summary>
-        private double CalculateLandRouteTimeAndCost(LandRoute route, string travelSpeed, MountType mountType, int numTravelers, out double totalCost)
+        /// <param name="result">The JourneyResult object to save.</param>
+        public void SaveJourneyResultToFile(JourneyResult result)
         {
-            double totalTimeHours = 0;
-            totalCost = 0;
-            double baseSpeedMph;
-
-            switch (travelSpeed.ToLowerInvariant())
+            try
             {
-                case "fast":
-                    baseSpeedMph = FAST_WALK_MPH;
-                    break;
-                case "slow":
-                    baseSpeedMph = SLOW_WALK_MPH;
-                    break;
-                case "normal":
-                default:
-                    baseSpeedMph = NORMAL_WALK_MPH;
-                    break;
-            }
+                string desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+                string appFolderPath = Path.Combine(desktopPath, "D&D 5e: Saved Routes");
 
-            double mountSpeedMph = 0;
-            switch (mountType)
+                // Ensure the directory exists
+                Directory.CreateDirectory(appFolderPath);
+
+                string fileName = $"{result.Origin.Name} to {result.Destination.Name}.txt";
+                string fullFilePath = Path.Combine(appFolderPath, fileName);
+
+                // Get the formatted result string
+                string contentToSave = result.GetFormattedResult();
+
+                File.WriteAllText(fullFilePath, contentToSave, Encoding.UTF8);
+
+                Console.WriteLine($"\nJourney details saved successfully to:\n{fullFilePath}");
+            }
+            catch (Exception ex)
             {
-                case MountType.RidingHorse:
-                case MountType.Warhorse:
-                    mountSpeedMph = 6;
-                    break;
-                case MountType.None:
-                default:
-                    mountSpeedMph = 0;
-                    break;
+                Console.WriteLine($"\nError saving journey details: {ex.Message}");
+                Console.WriteLine("Please ensure the application has write permissions to your Desktop.");
             }
-
-            double effectiveSpeedMph = (mountType != MountType.None) ? Math.Max(baseSpeedMph, mountSpeedMph) : baseSpeedMph;
-            double effectiveSpeedKmh = effectiveSpeedMph * MPH_TO_KMH_FACTOR;
-
-            if (effectiveSpeedKmh <= 0) return double.MaxValue;
-
-            for (int i = 0; i < route.Biomes.Count; i++)
-            {
-                string biome = route.Biomes[i];
-                double distance = route.BiomeDistances[i];
-                double difficultyMultiplier = BiomeModifier.GetMultiplier(biome);
-
-                double effectiveDistance = distance * difficultyMultiplier;
-
-                totalTimeHours += effectiveDistance / effectiveSpeedKmh;
-
-                totalCost += (effectiveDistance * 0.1 * numTravelers);
-            }
-
-            return totalTimeHours;
-        }
-
-        /// <summary>
-        /// Calculates the time and cost for a sea route segment.
-        /// </summary>
-        private double CalculateSeaRouteTimeAndCost(SeaRoute route, ShipType shipType, int numTravelers, out double totalCost)
-        {
-            double shipSpeedMph;
-            switch (shipType)
-            {
-                case ShipType.Rowboat:
-                    shipSpeedMph = 1.5;
-                    break;
-                case ShipType.Keelboat:
-                    shipSpeedMph = 2;
-                    break;
-                case ShipType.Longship:
-                    shipSpeedMph = 3;
-                    break;
-                case ShipType.Galley:
-                    shipSpeedMph = 4;
-                    break;
-                case ShipType.SailingShip:
-                    shipSpeedMph = 2;
-                    break;
-                case ShipType.None:
-                default:
-                    shipSpeedMph = 0;
-                    break;
-            }
-
-            if (shipSpeedMph <= 0)
-            {
-                totalCost = double.MaxValue;
-                return double.MaxValue;
-            }
-
-            double shipSpeedKmh = shipSpeedMph * MPH_TO_KMH_FACTOR;
-            double timeHours = route.Distance / shipSpeedKmh;
-
-            totalCost = route.Distance * 0.05 * numTravelers;
-
-            return timeHours;
         }
 
 
+        // --- DM Functions for Route Management ---
+
         /// <summary>
-        /// Prompts the DM to create a new land route and saves it,
-        /// allowing choice between default and custom folders.
+        /// Prompts the DM to create a new land route.
         /// </summary>
-        public void CreateDmLandRoute() // Renamed from CreateLandRoute
+        /// <param name="routeManager">The RouteManager instance to add the route to.</param>
+        public void CreateNewLandRouteDm(RouteManager routeManager)
         {
             Console.WriteLine("\n--- Create New Land Route (DM) ---");
             Console.WriteLine("Enter Origin Settlement Name and Region:");
@@ -427,46 +535,37 @@ namespace YourFantasyWorldProject.Pathfinding
             string destRegion = ConsoleInput.GetStringInput("Destination Region Name: ");
             Settlement destination = _dataManager.GetSettlementByNameAndRegion(destName, destRegion);
 
-            if (origin == null || destination == null)
+            List<string> biomes = new List<string>();
+            List<double> biomeDistances = new List<double>();
+
+            while (true)
             {
-                Console.WriteLine("Invalid origin or destination settlement. Please ensure both exist or can be created.");
+                string biome = ConsoleInput.GetStringInput("Enter biome name (e.g., Grasslands, Hot Desert) or type 'done' to finish: ", true);
+                if (biome.ToLowerInvariant() == "done") break;
+                biomes.Add(biome);
+                double distance = ConsoleInput.GetDoubleInput($"Enter distance in km for {biome}: ", 0.1);
+                biomeDistances.Add(distance);
+            }
+
+            if (!biomes.Any() || biomes.Count != biomeDistances.Count)
+            {
+                Console.WriteLine("Error: Must enter at least one biome and its corresponding distance.");
                 return;
             }
 
-            Console.WriteLine("Enter biomes traversed (comma-separated, e.g., Grasslands,Forest):");
-            List<string> biomes = ConsoleInput.GetStringInput("Biomes: ").Split(',')
-                                              .Select(s => s.Trim())
-                                              .Where(s => !string.IsNullOrWhiteSpace(s))
-                                              .ToList();
-
-            Console.WriteLine("Enter distance for each biome in kilometers (comma-separated, e.g., 10km,5km):");
-            List<double> biomeDistances = ConsoleInput.GetStringInput("Biome Distances: ").Split(',')
-                                                    .Select(s => double.TryParse(s.Replace("km", "").Trim(), out double val) && val > 0 ? val : 0)
-                                                    .Where(d => d > 0)
-                                                    .ToList();
-
-            bool isMapped = ConsoleInput.GetBooleanInput("Is this route fully mapped (yes/no)?");
-
-            if (biomes.Count == 0 || biomeDistances.Count == 0 || biomes.Count != biomeDistances.Count)
-            {
-                Console.WriteLine("Invalid biome or distance input. Number of biomes must match number of distances, and both must be provided.");
-                return;
-            }
-
-            bool saveAsCustom = ConsoleInput.GetBooleanInput("Save as a CUSTOM route (yes/no)? (No will save to default routes)");
+            bool isMapped = ConsoleInput.GetBooleanInput("Is this route mapped (True/False)?");
 
             LandRoute newRoute = new LandRoute(origin, destination, biomes, biomeDistances, isMapped);
 
-            _dataManager.SaveRoute(newRoute, RouteType.Land, saveAsCustom);
-            Console.WriteLine("Land Route created and saved. Remember to rebuild the graph for it to be included in pathfinding.");
+            routeManager.AddLandRoute(newRoute); // Add to in-memory, will trigger save and graph rebuild
+            Console.WriteLine("Land Route created and saved.");
         }
 
-
         /// <summary>
-        /// Prompts the DM to create a new sea route and saves it,
-        /// allowing choice between default and custom folders.
+        /// Prompts the DM to create a new sea route.
         /// </summary>
-        public void CreateDmSeaRoute() // Renamed from CreateSeaRoute
+        /// <param name="routeManager">The RouteManager instance to add the route to.</param>
+        public void CreateNewSeaRouteDm(RouteManager routeManager)
         {
             Console.WriteLine("\n--- Create New Sea Route (DM) ---");
             Console.WriteLine("Enter Origin Settlement Name and Region:");
@@ -474,32 +573,27 @@ namespace YourFantasyWorldProject.Pathfinding
             string originRegion = ConsoleInput.GetStringInput("Origin Region Name: ");
             Settlement origin = _dataManager.GetSettlementByNameAndRegion(originName, originRegion);
 
-
             Console.WriteLine("Enter Destination Settlement Name and Region:");
             string destName = ConsoleInput.GetStringInput("Destination Settlement Name: ");
             string destRegion = ConsoleInput.GetStringInput("Destination Region Name: ");
             Settlement destination = _dataManager.GetSettlementByNameAndRegion(destName, destRegion);
 
-            if (origin == null || destination == null)
-            {
-                Console.WriteLine("Invalid origin or destination settlement. Please ensure both exist or can be created.");
-                return;
-            }
-
             double distance = ConsoleInput.GetDoubleInput("Enter distance in kilometers: ", 0.1);
-
-            bool saveAsCustom = ConsoleInput.GetBooleanInput("Save as a CUSTOM route (yes/no)? (No will save to default routes)");
 
             SeaRoute newRoute = new SeaRoute(origin, destination, distance);
 
-            _dataManager.SaveRoute(newRoute, RouteType.Sea, saveAsCustom);
-            Console.WriteLine("Sea Route created and saved. Remember to rebuild the graph for it to be included in pathfinding.");
+            routeManager.AddSeaRoute(newRoute); // Add to in-memory, will trigger save and graph rebuild
+            Console.WriteLine("Sea Route created and saved.");
         }
 
+
+        // --- Player Functions for Route Management ---
+
         /// <summary>
-        /// Allows a player to create a new custom land route. This route will *always* be saved as custom.
+        /// Allows a player to create a custom land route. This will be saved to the custom routes directory.
         /// </summary>
-        public void CreatePlayerCustomLandRoute()
+        /// <param name="routeManager">The RouteManager instance to add the route to.</param>
+        public void CreateNewCustomLandRoutePlayer(RouteManager routeManager)
         {
             Console.WriteLine("\n--- Create New Custom Land Route (Player) ---");
             Console.WriteLine("Enter Origin Settlement Name and Region:");
@@ -518,39 +612,45 @@ namespace YourFantasyWorldProject.Pathfinding
                 return;
             }
 
-            Console.WriteLine("Enter biomes traversed (comma-separated, e.g., Grasslands,Forest):");
-            List<string> biomes = ConsoleInput.GetStringInput("Biomes: ").Split(',')
-                                              .Select(s => s.Trim())
-                                              .Where(s => !string.IsNullOrWhiteSpace(s))
-                                              .ToList();
+            List<string> biomes = new List<string>();
+            List<double> biomeDistances = new List<double>();
 
-            Console.WriteLine("Enter distance for each biome in kilometers (comma-separated, e.g., 10km,5km):");
-            List<double> biomeDistances = ConsoleInput.GetStringInput("Biome Distances: ").Split(',')
-                                                    .Select(s => double.TryParse(s.Replace("km", "").Trim(), out double val) && val > 0 ? val : 0)
-                                                    .Where(d => d > 0)
-                                                    .ToList();
-
-            bool isMapped = ConsoleInput.GetBooleanInput("Is this route fully mapped (yes/no)?"); // Players can still mark if mapped
-
-            if (biomes.Count == 0 || biomeDistances.Count == 0 || biomes.Count != biomeDistances.Count)
+            Console.WriteLine("Enter biomes and their distances for this route (e.g., Grasslands, 100km). Type 'done' when finished.");
+            while (true)
             {
-                Console.WriteLine("Invalid biome or distance input. Number of biomes must match number of distances, and both must be provided.");
+                string biomeInput = ConsoleInput.GetStringInput("Biome name (or 'done'): ", true);
+                if (biomeInput.ToLowerInvariant() == "done") break;
+
+                double distance = ConsoleInput.GetDoubleInput($"Distance in km for {biomeInput}: ", 0.1);
+
+                biomes.Add(biomeInput);
+                biomeDistances.Add(distance);
+            }
+
+            if (!biomes.Any() || biomes.Count != biomeDistances.Count)
+            {
+                Console.WriteLine("Error: At least one biome and its distance must be entered for a land route.");
                 return;
             }
 
+            bool isMapped = true; // Player custom routes are always considered mapped
+
             LandRoute newRoute = new LandRoute(origin, destination, biomes, biomeDistances, isMapped);
 
-            // Always save as custom for players
-            _dataManager.SaveRoute(newRoute, RouteType.Land, true);
+            // Save the custom route. It will be added to in-memory routes and saved properly by SaveAllRoutes.
+            // For now, _dataManager.SaveSingleCustomRoute is used for immediate file writing.
+            _dataManager.SaveSingleCustomRoute(newRoute, RouteType.Land, true);
+            routeManager.AddLandRoute(newRoute); // Add to RouteManager's in-memory list and trigger full save
             Console.WriteLine("Custom Land Route created and saved. This route will be available in future sessions.");
         }
 
         /// <summary>
-        /// Allows a player to create a new custom sea route. This route will *always* be saved as custom.
+        /// Allows a player to create a custom sea route. This will be saved to the custom routes directory.
         /// </summary>
-        public void CreatePlayerCustomSeaRoute()
+        /// <param name="routeManager">The RouteManager instance to add the route to.</param>
+        public void CreateNewCustomSeaRoutePlayer(RouteManager routeManager)
         {
-            Console.WriteLine("\n--- Create New Custom Sea Route (Player) ---");
+            Console.WriteLine("\n--- Create New Custom Sea Route (Player) ---\n");
             Console.WriteLine("Enter Origin Settlement Name and Region:");
             string originName = ConsoleInput.GetStringInput("Origin Settlement Name: ");
             string originRegion = ConsoleInput.GetStringInput("Origin Region Name: ");
@@ -571,8 +671,9 @@ namespace YourFantasyWorldProject.Pathfinding
 
             SeaRoute newRoute = new SeaRoute(origin, destination, distance);
 
-            // Always save as custom for players
-            _dataManager.SaveRoute(newRoute, RouteType.Sea, true);
+            // Save the custom route. It will be added to in-memory routes and saved properly by SaveAllRoutes.
+            _dataManager.SaveSingleCustomRoute(newRoute, RouteType.Sea, true);
+            routeManager.AddSeaRoute(newRoute); // Add to RouteManager's in-memory list and trigger full save
             Console.WriteLine("Custom Sea Route created and saved. This route will be available in future sessions.");
         }
     }
