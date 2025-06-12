@@ -1,4 +1,5 @@
-﻿using System;
+﻿// Program.cs
+using System;
 using System.IO; // Added for File operations
 using System.Linq;
 using YourFantasyWorldProject.Classes;
@@ -34,7 +35,7 @@ namespace YourFantasyWorldProject
             {
                 // If DM password file is not found or empty, skip straight to Player Mode
                 Console.WriteLine("\nDM password file not found or empty. Starting in Player Mode automatically.");
-                RunPlayerMenu(pathfinder);
+                RunPlayerMenu(pathfinder, dataManager); // Pass dataManager to player menu
             }
             else
             {
@@ -57,7 +58,7 @@ namespace YourFantasyWorldProject
                             if (enteredPassword == dmPassword)
                             {
                                 Console.WriteLine("DM access granted.");
-                                RunDmMenu(routeManager, pathfinder);
+                                RunDmMenu(routeManager, pathfinder, dataManager); // Pass dataManager to DM menu
                             }
                             else
                             {
@@ -65,7 +66,7 @@ namespace YourFantasyWorldProject
                             }
                             break;
                         case "2": // Player Mode
-                            RunPlayerMenu(pathfinder);
+                            RunPlayerMenu(pathfinder, dataManager); // Pass dataManager to player menu
                             break;
                         case "0":
                             appRunning = false;
@@ -80,7 +81,7 @@ namespace YourFantasyWorldProject
         }
 
         // --- DM Mode Menu ---
-        static void RunDmMenu(RouteManager routeManager, Pathfinder pathfinder)
+        static void RunDmMenu(RouteManager routeManager, Pathfinder pathfinder, DataManager dataManager)
         {
             bool dmMenuRunning = true;
             while (dmMenuRunning)
@@ -94,7 +95,8 @@ namespace YourFantasyWorldProject
                 Console.WriteLine("6. Print Routes for a Region");
                 Console.WriteLine("7. Check Total Unique Settlements");
                 Console.WriteLine("8. Find Route (Dijkstra's)");
-                Console.WriteLine("9. Custom Sea Route Calculation");
+                Console.WriteLine("9. Create Land Route (Choose Custom/Default)"); // Clarified menu text
+                Console.WriteLine("10. Create Sea Route (Choose Custom/Default)"); // New menu option for sea route
                 Console.WriteLine("0. Back to Main Menu");
 
                 string choice = ConsoleInput.GetStringInput("Enter your choice: ");
@@ -102,23 +104,19 @@ namespace YourFantasyWorldProject
                 switch (choice)
                 {
                     case "1":
-                        routeManager.AddRoute();
-                        routeManager.RebuildGraph(); // Rebuild graph after any data modification
+                        routeManager.AddRoute(); // This method now handles custom/default choice internally
                         break;
                     case "2":
                         routeManager.RemoveRoute();
-                        routeManager.RebuildGraph();
                         break;
                     case "3":
                         routeManager.EditRoute();
-                        routeManager.RebuildGraph();
                         break;
                     case "4":
                         routeManager.FileValidation();
                         break;
                     case "5":
                         routeManager.FileRepair();
-                        routeManager.RebuildGraph(); // Rebuild graph after repair
                         break;
                     case "6":
                         routeManager.FilePrint();
@@ -127,12 +125,36 @@ namespace YourFantasyWorldProject
                         routeManager.FileCheck();
                         break;
                     case "8":
-                        pathfinder.FindRoute();
+                        string originNameFind = ConsoleInput.GetStringInput("Origin Settlement Name: ");
+                        string originRegionFind = ConsoleInput.GetStringInput("Origin Region Name: ");
+                        Settlement originFind = dataManager.GetSettlementByNameAndRegion(originNameFind, originRegionFind);
+
+                        string destinationNameFind = ConsoleInput.GetStringInput("Destination Settlement Name: ");
+                        string destinationRegionFind = ConsoleInput.GetStringInput("Destination Region Name: ");
+                        Settlement destinationFind = dataManager.GetSettlementByNameAndRegion(destinationNameFind, destinationRegionFind);
+
+                        if (originFind != null && destinationFind != null)
+                        {
+                            pathfinder.FindPath(
+                                origin: originFind,
+                                destination: destinationFind,
+                                numTravelers: ConsoleInput.GetIntInput("Number of travelers: ", 1),
+                                travelSpeed: ConsoleInput.GetStringInput("Travel Speed (Normal, Fast, Slow): "),
+                                shipType: ConsoleInput.GetEnumInput<ShipType>("Select Ship Type:"),
+                                mountType: ConsoleInput.GetEnumInput<MountType>("Select Mount Type:"),
+                                preference: ConsoleInput.GetEnumInput<RoutePreference>("Select Route Preference:")
+                            ).DisplayResult();
+                        }
+                        else
+                        {
+                            Console.WriteLine("Invalid origin or destination settlement entered for pathfinding.");
+                        }
                         break;
                     case "9":
-                        // Assuming CustomSeaRoute might add a route that needs to be part of the graph
-                        pathfinder.CustomSeaRoute();
-                        routeManager.RebuildGraph(); // Rebuild graph after custom route creation
+                        pathfinder.CreateLandRoute(); // Calls the renamed method
+                        break;
+                    case "10": // New case for creating sea routes explicitly
+                        pathfinder.CreateSeaRoute(); // Calls the renamed method
                         break;
                     case "0":
                         dmMenuRunning = false;
@@ -146,14 +168,14 @@ namespace YourFantasyWorldProject
         }
 
         // --- Player Mode Menu ---
-        static void RunPlayerMenu(Pathfinder pathfinder)
+        static void RunPlayerMenu(Pathfinder pathfinder, DataManager dataManager)
         {
             bool playerMenuRunning = true;
             while (playerMenuRunning)
             {
                 Console.WriteLine("\n--- Player Menu ---");
                 Console.WriteLine("1. Find Route (Dijkstra's)");
-                Console.WriteLine("2. Custom Sea Route Calculation");
+                Console.WriteLine("2. Create Custom Sea Route (for saving)"); // Clarified Player Mode option
                 Console.WriteLine("0. Back to Main Menu");
 
                 string choice = ConsoleInput.GetStringInput("Enter your choice: ");
@@ -161,13 +183,36 @@ namespace YourFantasyWorldProject
                 switch (choice)
                 {
                     case "1":
-                        pathfinder.FindRoute();
+                        string originNamePlayer = ConsoleInput.GetStringInput("Origin Settlement Name: ");
+                        string originRegionPlayer = ConsoleInput.GetStringInput("Origin Region Name: ");
+                        Settlement originPlayer = dataManager.GetSettlementByNameAndRegion(originNamePlayer, originRegionPlayer);
+
+                        string destinationNamePlayer = ConsoleInput.GetStringInput("Destination Settlement Name: ");
+                        string destinationRegionPlayer = ConsoleInput.GetStringInput("Destination Region Name: ");
+                        Settlement destinationPlayer = dataManager.GetSettlementByNameAndRegion(destinationNamePlayer, destinationRegionPlayer);
+
+                        if (originPlayer != null && destinationPlayer != null)
+                        {
+                            pathfinder.FindPath(
+                                origin: originPlayer,
+                                destination: destinationPlayer,
+                                numTravelers: ConsoleInput.GetIntInput("Number of travelers: ", 1),
+                                travelSpeed: ConsoleInput.GetStringInput("Travel Speed (Normal, Fast, Slow): "),
+                                shipType: ConsoleInput.GetEnumInput<ShipType>("Select Ship Type:"),
+                                mountType: ConsoleInput.GetEnumInput<MountType>("Select Mount Type:"),
+                                preference: ConsoleInput.GetEnumInput<RoutePreference>("Select Route Preference:")
+                            ).DisplayResult();
+                        }
+                        else
+                        {
+                            Console.WriteLine("Invalid origin or destination settlement entered for pathfinding.");
+                        }
                         break;
                     case "2":
-                        pathfinder.CustomSeaRoute();
-                        // Player-created custom sea routes are not automatically added to the main graph
-                        // but are calculated on the fly. If you want them saved and part of the main graph,
-                        // you'd need to add save logic here and then rebuild the graph in DM mode.
+                        // In Player Mode, this will still call the CreateSeaRoute method, which now includes the custom/default choice.
+                        // The note emphasizes that this will save the route.
+                        Console.WriteLine("Note: This option will create and save a new sea route to your local data.");
+                        pathfinder.CreateSeaRoute(); // Calls the renamed method
                         break;
                     case "0":
                         playerMenuRunning = false;

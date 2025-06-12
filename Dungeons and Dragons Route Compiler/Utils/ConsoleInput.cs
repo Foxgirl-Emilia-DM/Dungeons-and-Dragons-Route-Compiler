@@ -48,22 +48,7 @@ namespace YourFantasyWorldProject.Utils
                 {
                     return value;
                 }
-                if (minValue == int.MinValue && maxValue == int.MaxValue)
-                {
-                    Console.WriteLine("Invalid input. Please enter a valid integer.");
-                }
-                else if (minValue != int.MinValue && maxValue != int.MaxValue)
-                {
-                    Console.WriteLine($"Invalid input. Please enter an integer between {minValue} and {maxValue}.");
-                }
-                else if (minValue != int.MinValue)
-                {
-                    Console.WriteLine($"Invalid input. Please enter an integer greater than or equal to {minValue}.");
-                }
-                else // maxValue is not int.MaxValue
-                {
-                    Console.WriteLine($"Invalid input. Please enter an integer less than or equal to {maxValue}.");
-                }
+                Console.WriteLine($"Invalid input. Please enter a valid integer between {minValue} and {maxValue}.");
             }
         }
 

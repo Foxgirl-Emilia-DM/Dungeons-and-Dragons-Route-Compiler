@@ -6,6 +6,8 @@ using System.Linq;
 using YourFantasyWorldProject.Classes;
 using System.Net.Http;
 using System.Security.Cryptography; // Added for encryption
+using System.Text; // Added for Encoding
+using System.Globalization; // Added for TextInfo
 
 namespace YourFantasyWorldProject.Managers
 {
@@ -29,65 +31,316 @@ namespace YourFantasyWorldProject.Managers
         // Keep them secret! This is for demonstration.
         // A real key/IV should be 32 bytes for AES-256 and 16 bytes for IV.
         // You can generate them once and keep them fixed.
-        private static readonly byte[] EncryptionKey = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20 }; // 32 bytes for AES-256
-        private static readonly byte[] EncryptionIV = { 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F, 0x30 }; // 16 bytes for IV
+        private static readonly byte[] Key = Encoding.UTF8.GetBytes("YourSuperSecretKey12345678901234567890"); // 32 bytes for AES-256
+        private static readonly byte[] IV = Encoding.UTF8.GetBytes("YourInitialization"); // 16 bytes for AES
 
-        public DataManager(string baseDataDirectory = "WorldData")
+        public DataManager(string basePath = "WorldData")
         {
-            _basePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, baseDataDirectory);
-            _landPath = Path.Combine(_basePath, "Land");
-            _seaPath = Path.Combine(_basePath, "Sea");
+            _basePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, basePath);
+            _landPath = Path.Combine(_basePath, "LandRoutes");
+            _seaPath = Path.Combine(_basePath, "SeaRoutes");
             _customRoutesPath = Path.Combine(_basePath, "CustomRoutes");
             _customLandPath = Path.Combine(_customRoutesPath, "Land");
             _customSeaPath = Path.Combine(_customRoutesPath, "Sea");
 
-            // Ensure all directories exist
+            // Ensure directories exist
             Directory.CreateDirectory(_landPath);
             Directory.CreateDirectory(_seaPath);
-            Directory.CreateDirectory(_customRoutesPath);
             Directory.CreateDirectory(_customLandPath);
             Directory.CreateDirectory(_customSeaPath);
         }
 
-        // --- Helper methods for file paths ---
-        private string GetFilePath(string regionName, RouteType routeType)
+        // --- Settlement Management ---
+        public Settlement GetSettlementByNameAndRegion(string name, string region)
         {
-            string folder = routeType == RouteType.Land ? _landPath : _seaPath;
-            return Path.Combine(folder, $"{regionName}.txt");
+            // Creates a new settlement. Settlement constructor now stores original casing.
+            return new Settlement(name, region);
         }
 
-        private string GetCustomFilePath(string regionName, RouteType routeType)
+        // --- Route Loading ---
+        public List<LandRoute> LoadLandRoutesFromRegionFile(string regionName)
         {
-            string folder = routeType == RouteType.Land ? _customLandPath : _customSeaPath;
-            return Path.Combine(folder, $"Custom_{regionName}.txt");
+            List<LandRoute> routes = new List<LandRoute>();
+            string defaultFilePath = Path.Combine(_landPath, $"{regionName.ToUpperInvariant()}.txt");
+            string customFilePath = Path.Combine(_customLandPath, $"{regionName.ToUpperInvariant()}.txt");
+
+            // Load from default and custom files
+            routes.AddRange(LoadRoutesFromFile<LandRoute>(defaultFilePath, regionName, RouteType.Land));
+            routes.AddRange(LoadRoutesFromFile<LandRoute>(customFilePath, regionName, RouteType.Land));
+
+            return routes;
         }
 
-        public IEnumerable<string> GetAllRegionNames()
+        public List<SeaRoute> LoadSeaRoutesFromRegionFile(string regionName)
         {
-            var landFiles = Directory.GetFiles(_landPath, "*.txt").Select(f => Path.GetFileNameWithoutExtension(f));
-            var seaFiles = Directory.GetFiles(_seaPath, "*.txt").Select(f => Path.GetFileNameWithoutExtension(f));
-            var customLandFiles = Directory.GetFiles(_customLandPath, "Custom_*.txt")
-                                            .Select(f => Path.GetFileNameWithoutExtension(f).Replace("Custom_", ""));
-            var customSeaFiles = Directory.GetFiles(_customSeaPath, "Custom_*.txt")
-                                            .Select(f => Path.GetFileNameWithoutExtension(f).Replace("Custom_", ""));
+            List<SeaRoute> routes = new List<SeaRoute>();
+            string defaultFilePath = Path.Combine(_seaPath, $"{regionName.ToUpperInvariant()}.txt");
+            string customFilePath = Path.Combine(_customSeaPath, $"{regionName.ToUpperInvariant()}.txt");
 
-            HashSet<string> allRegionNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var file in landFiles.Concat(seaFiles).Concat(customLandFiles).Concat(customSeaFiles))
+            // Load from default and custom files
+            routes.AddRange(LoadRoutesFromFile<SeaRoute>(defaultFilePath, regionName, RouteType.Sea));
+            routes.AddRange(LoadRoutesFromFile<SeaRoute>(customFilePath, regionName, RouteType.Sea));
+
+            return routes;
+        }
+
+        /// <summary>
+        /// Generic helper to load routes from a specified file path.
+        /// </summary>
+        private List<T> LoadRoutesFromFile<T>(string filePath, string regionName, RouteType routeType) where T : IRoute
+        {
+            List<T> routes = new List<T>();
+
+            if (!File.Exists(filePath))
             {
-                allRegionNames.Add(file);
+                Console.WriteLine($"Route file not found: {Path.GetFileName(filePath)}. Attempting to download from GitHub...");
+                // Attempt to download and decrypt from GitHub
+                string githubUrlSegment = (routeType == RouteType.Land) ? "LandRoutes" : "SeaRoutes";
+                string githubUrl = $"{GitHubBaseUrl}{githubUrlSegment}/{regionName.ToUpperInvariant()}.enc";
+                try
+                {
+                    byte[] encryptedData = _httpClient.GetByteArrayAsync(githubUrl).Result;
+                    string decryptedContent = DecryptStringFromBytes_Aes(encryptedData, Key, IV);
+                    File.WriteAllText(filePath, decryptedContent); // Save decrypted content to local default path
+                    Console.WriteLine($"Downloaded and decrypted route data for {regionName} from GitHub.");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Failed to download or decrypt route data for {regionName} from GitHub: {ex.Message}");
+                    return routes; // Return empty list if download fails
+                }
             }
-            return allRegionNames;
+
+            try
+            {
+                string[] lines = File.ReadAllLines(filePath);
+                Settlement currentOrigin = null;
+
+                foreach (string line in lines)
+                {
+                    string trimmedLine = line.Trim();
+                    if (string.IsNullOrWhiteSpace(trimmedLine))
+                    {
+                        continue; // Skip empty lines
+                    }
+
+                    if (!trimmedLine.StartsWith("\t")) // This is an origin settlement line
+                    {
+                        string[] originParts = trimmedLine.Split('\t');
+                        string originName = originParts[0].Trim();
+                        // For origin region, prioritize what's in the file, otherwise use the filename's region
+                        string originRegion = originParts.Length > 1 ? originParts[1].Trim() : Path.GetFileNameWithoutExtension(filePath);
+                        currentOrigin = GetSettlementByNameAndRegion(originName, originRegion);
+                    }
+                    else // This is a route line from the currentOrigin
+                    {
+                        if (currentOrigin == null)
+                        {
+                            Console.WriteLine($"Warning: Skipping route line '{line}' as no origin settlement was defined.");
+                            continue;
+                        }
+                        try
+                        {
+                            if (routeType == RouteType.Land && typeof(T) == typeof(LandRoute))
+                            {
+                                routes.Add((T)(object)LandRoute.ParseFromFileLine(currentOrigin, line));
+                            }
+                            else if (routeType == RouteType.Sea && typeof(T) == typeof(SeaRoute))
+                            {
+                                routes.Add((T)(object)SeaRoute.ParseFromFileLine(currentOrigin, line));
+                            }
+                        }
+                        catch (FormatException ex)
+                        {
+                            Console.WriteLine($"Error parsing route line '{line}': {ex.Message}");
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"An unexpected error occurred while parsing route line '{line}': {ex.Message}");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error reading route file {filePath}: {ex.Message}");
+            }
+
+            return routes;
         }
 
-        // --- New: Encryption/Decryption Methods ---
-        private byte[] EncryptData(byte[] data, byte[] key, byte[] iv)
+        public List<string> GetAllRegions()
         {
+            HashSet<string> regions = new HashSet<string>();
+
+            // Get regions from default land route files
+            foreach (string filePath in Directory.GetFiles(_landPath, "*.txt"))
+            {
+                regions.Add(Path.GetFileNameWithoutExtension(filePath));
+            }
+            // Get regions from custom land route files
+            foreach (string filePath in Directory.GetFiles(_customLandPath, "*.txt"))
+            {
+                regions.Add(Path.GetFileNameWithoutExtension(filePath));
+            }
+
+            // Get regions from default sea route files
+            foreach (string filePath in Directory.GetFiles(_seaPath, "*.txt"))
+            {
+                regions.Add(Path.GetFileNameWithoutExtension(filePath));
+            }
+            // Get regions from custom sea route files
+            foreach (string filePath in Directory.GetFiles(_customSeaPath, "*.txt"))
+            {
+                regions.Add(Path.GetFileNameWithoutExtension(filePath));
+            }
+
+            return regions.ToList();
+        }
+
+
+        // --- Route Saving ---
+        /// <summary>
+        /// Saves a route to the appropriate file (default or custom).
+        /// This method will append to an existing file or create a new one.
+        /// It ensures the correct file format is maintained.
+        /// </summary>
+        /// <param name="route">The route to save.</param>
+        /// <param name="routeType">The type of route (Land or Sea).</param>
+        /// <param name="isCustom">True if the route should be saved to the custom routes folder, false for default.</param>
+        public void SaveRoute(IRoute route, RouteType routeType, bool isCustom)
+        {
+            // Use the Origin's region to determine the file name
+            string region = route.Origin.Region;
+
+            string targetDir = "";
+            string filePath = "";
+
+            if (routeType == RouteType.Land)
+            {
+                targetDir = isCustom ? _customLandPath : _landPath;
+                filePath = Path.Combine(targetDir, $"{region.ToUpperInvariant()}.txt"); // Filename is always uppercase region
+            }
+            else if (routeType == RouteType.Sea)
+            {
+                targetDir = isCustom ? _customSeaPath : _seaPath;
+                filePath = Path.Combine(targetDir, $"{region.ToUpperInvariant()}.txt"); // Filename is always uppercase region
+            }
+            else
+            {
+                Console.WriteLine("Invalid route type for saving.");
+                return;
+            }
+
+            // Ensure the directory exists
+            Directory.CreateDirectory(targetDir);
+
+            List<string> fileContent = new List<string>();
+            bool originFound = false;
+
+            if (File.Exists(filePath))
+            {
+                fileContent = File.ReadAllLines(filePath).ToList();
+            }
+
+            // Check if the origin settlement already exists as a header in the file
+            // Compare using the invariant uppercase name for lookup
+            string originHeaderContent = $"{route.Origin.Name}\t{route.Origin.Region}"; // Use original casing for header content
+            int originIndex = -1;
+            for (int i = 0; i < fileContent.Count; i++)
+            {
+                // To find an existing header, we need to compare its content using invariant casing.
+                // Assuming headers are "NAME\tREGION"
+                string fileLineTrimmed = fileContent[i].Trim();
+                if (!fileLineTrimmed.StartsWith("\t") && !string.IsNullOrWhiteSpace(fileLineTrimmed)) // This is a potential origin header
+                {
+                    string[] parts = fileLineTrimmed.Split('\t');
+                    if (parts.Length >= 1 && parts[0].Trim().ToUpperInvariant().Equals(route.Origin.Name.ToUpperInvariant()))
+                    {
+                        if (parts.Length == 2 && parts[1].Trim().ToUpperInvariant().Equals(route.Origin.Region.ToUpperInvariant()))
+                        {
+                            originIndex = i;
+                            originFound = true;
+                            break;
+                        }
+                        else if (parts.Length == 1 && string.IsNullOrWhiteSpace(route.Origin.Region)) // Case for 'TINVERKE' without region
+                        {
+                            originIndex = i;
+                            originFound = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+
+            if (!originFound)
+            {
+                // If origin not found, add its header with original casing.
+                // The example shows "TINVERKE" on its own line if it's the only info.
+                // If region is also present, it should be "TINVERKE\tKingdom of Faalskarth".
+                string newOriginLine = $"{route.Origin.Name}";
+                if (!string.IsNullOrWhiteSpace(route.Origin.Region))
+                {
+                    newOriginLine += $"\t{route.Origin.Region}";
+                }
+                fileContent.Add(newOriginLine);
+                originIndex = fileContent.Count - 1; // It's now the last line
+            }
+
+            // Append the new route line after the origin header or at the end if the origin was just added
+            // Ensure no duplicate routes are added.
+            string newRouteLine = routeType == RouteType.Land ? ((LandRoute)route).ToFileString() : ((SeaRoute)route).ToFileString();
+            bool routeExists = false;
+            // Iterate from originIndex + 1 to find existing routes from this origin
+            for (int i = originIndex + 1; i < fileContent.Count; i++)
+            {
+                // Routes always start with a tab
+                if (fileContent[i].TrimStart().StartsWith("\t") && fileContent[i].Trim().Equals(newRouteLine.Trim(), StringComparison.OrdinalIgnoreCase))
+                {
+                    routeExists = true;
+                    Console.WriteLine("Route already exists in the file. Skipping save.");
+                    break;
+                }
+                // Stop if we hit another origin header (a line that doesn't start with a tab)
+                if (!fileContent[i].TrimStart().StartsWith("\t") && !string.IsNullOrWhiteSpace(fileContent[i].Trim()))
+                {
+                    break;
+                }
+            }
+
+            if (!routeExists)
+            {
+                // Find the correct insertion point for the new route
+                // It should be after the origin header, and before the next origin header (if any)
+                int insertionPoint = originIndex + 1;
+                while (insertionPoint < fileContent.Count && fileContent[insertionPoint].TrimStart().StartsWith("\t"))
+                {
+                    insertionPoint++;
+                }
+                fileContent.Insert(insertionPoint, newRouteLine);
+                File.WriteAllLines(filePath, fileContent);
+                Console.WriteLine($"Route saved to {Path.GetFileName(filePath)} in the {(isCustom ? "custom" : "default")} folder.");
+            }
+        }
+
+
+        // --- ENCRYPTION/DECRYPTION for player data ---
+        private byte[] EncryptStringToBytes_Aes(string plainText, byte[] Key, byte[] IV)
+        {
+            if (plainText == null || plainText.Length <= 0)
+                throw new ArgumentNullException("plainText");
+            if (Key == null || Key.Length <= 0)
+                throw new ArgumentNullException("Key");
+            if (IV == null || IV.Length <= 0)
+                throw new ArgumentNullException("IV");
+
+            byte[] encrypted;
+
             using (Aes aesAlg = Aes.Create())
             {
-                aesAlg.Key = key;
-                aesAlg.IV = iv;
-                aesAlg.Mode = CipherMode.CBC; // CBC mode is common
-                aesAlg.Padding = PaddingMode.PKCS7; // Standard padding
+                aesAlg.Key = Key;
+                aesAlg.IV = IV;
 
                 ICryptoTransform encryptor = aesAlg.CreateEncryptor(aesAlg.Key, aesAlg.IV);
 
@@ -95,682 +348,205 @@ namespace YourFantasyWorldProject.Managers
                 {
                     using (CryptoStream csEncrypt = new CryptoStream(msEncrypt, encryptor, CryptoStreamMode.Write))
                     {
-                        csEncrypt.Write(data, 0, data.Length);
-                        csEncrypt.FlushFinalBlock();
+                        using (StreamWriter swEncrypt = new StreamWriter(csEncrypt))
+                        {
+                            swEncrypt.Write(plainText);
+                        }
+                        encrypted = msEncrypt.ToArray();
                     }
-                    return msEncrypt.ToArray();
                 }
             }
+            return encrypted;
         }
 
-        private byte[] DecryptData(byte[] data, byte[] key, byte[] iv)
+        private string DecryptStringFromBytes_Aes(byte[] cipherText, byte[] Key, byte[] IV)
         {
+            if (cipherText == null || cipherText.Length <= 0)
+                throw new ArgumentNullException("cipherText");
+            if (Key == null || Key.Length <= 0)
+                throw new ArgumentNullException("Key");
+            if (IV == null || IV.Length <= 0)
+                throw new ArgumentNullException("IV");
+
+            string plaintext = null;
+
             using (Aes aesAlg = Aes.Create())
             {
-                aesAlg.Key = key;
-                aesAlg.IV = iv;
-                aesAlg.Mode = CipherMode.CBC;
-                aesAlg.Padding = PaddingMode.PKCS7;
+                aesAlg.Key = Key;
+                aesAlg.IV = IV;
 
                 ICryptoTransform decryptor = aesAlg.CreateDecryptor(aesAlg.Key, aesAlg.IV);
 
-                using (MemoryStream msDecrypt = new MemoryStream(data))
+                using (MemoryStream msDecrypt = new MemoryStream(cipherText))
                 {
                     using (CryptoStream csDecrypt = new CryptoStream(msDecrypt, decryptor, CryptoStreamMode.Read))
                     {
-                        using (MemoryStream msPlain = new MemoryStream())
+                        using (StreamReader srDecrypt = new StreamReader(csDecrypt))
                         {
-                            csDecrypt.CopyTo(msPlain);
-                            return msPlain.ToArray();
+                            plaintext = srDecrypt.ReadToEnd();
                         }
                     }
                 }
             }
-        }
-
-        // --- Modified: Download file from GitHub (now downloads encrypted bytes and decrypts) ---
-        private string DownloadFileFromGitHub(string githubRelativePath)
-        {
-            string url = GitHubBaseUrl + githubRelativePath;
-            Console.WriteLine($"Attempting to download encrypted data from: {url}");
-            try
-            {
-                // Download raw bytes (encrypted content)
-                byte[] encryptedBytes = _httpClient.GetByteArrayAsync(url).Result;
-
-                // Decrypt the bytes
-                byte[] decryptedBytes = DecryptData(encryptedBytes, EncryptionKey, EncryptionIV);
-
-                // Convert decrypted bytes to string (assuming UTF-8 encoding)
-                string fileContent = System.Text.Encoding.UTF8.GetString(decryptedBytes);
-                Console.WriteLine($"Successfully downloaded and decrypted: {Path.GetFileName(githubRelativePath)}");
-                return fileContent;
-            }
-            catch (HttpRequestException httpEx)
-            {
-                if (httpEx.StatusCode == System.Net.HttpStatusCode.NotFound)
-                {
-                    Console.WriteLine($"File not found on GitHub: {Path.GetFileName(githubRelativePath)} ({url}) - This might be normal if a region has no data for this type.");
-                }
-                else
-                {
-                    Console.WriteLine($"HTTP Error downloading {Path.GetFileName(githubRelativePath)} from GitHub: {httpEx.Message}");
-                }
-                return null;
-            }
-            catch (CryptographicException cryptoEx)
-            {
-                Console.WriteLine($"Encryption/Decryption Error for {Path.GetFileName(githubRelativePath)}: {cryptoEx.Message}. This might indicate a wrong key/IV or corrupted encrypted data.");
-                return null;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error downloading/decrypting {Path.GetFileName(githubRelativePath)} from GitHub: {ex.Message}");
-                return null;
-            }
+            return plaintext;
         }
 
 
-        // --- Core Loading Methods (Modified to use the updated DownloadFileFromGitHub) ---
-        public (List<LandRoute> landRoutes, List<SeaRoute> seaRoutes) LoadRoutes(string regionName)
+        // --- File Validation and Repair ---
+        /// <summary>
+        /// Validates and attempts to repair a route file based on its type.
+        /// </summary>
+        /// <param name="filePath">The path to the file to validate.</param>
+        /// <param name="routeType">The type of routes expected in the file.</param>
+        /// <returns>A list of issues found and/or repaired.</returns>
+        public List<string> ValidateAndRepairFile(string filePath, RouteType routeType)
         {
-            List<LandRoute> landRoutes = new List<LandRoute>();
-            List<SeaRoute> seaRoutes = new List<SeaRoute>();
+            List<string> issuesFound = new List<string>();
+            List<string> repairedLines = new List<string>();
+            bool fileChanged = false;
+            TextInfo textInfo = new CultureInfo("en-US", false).TextInfo;
 
-            // --- Load Regular Land Routes ---
-            string landFilePath = GetFilePath(regionName, RouteType.Land);
-            string landGitHubRelativePath = $"Land/{regionName}.txt";
-
-            if (File.Exists(landFilePath))
-            {
-                // If local file exists (for DM's machine), load it as plaintext
-                landRoutes.AddRange(ParseLandFile(landFilePath));
-            }
-            else
-            {
-                // If local file doesn't exist (for players or new regions), attempt to download and decrypt from GitHub
-                string downloadedContent = DownloadFileFromGitHub(landGitHubRelativePath);
-                if (downloadedContent != null)
-                {
-                    // Parse from the decrypted string content
-                    landRoutes.AddRange(ParseLandContent(downloadedContent, landGitHubRelativePath)); // Use new ParseLandContent
-                }
-            }
-
-            // --- Load Regular Sea Routes ---
-            string seaFilePath = GetFilePath(regionName, RouteType.Sea);
-            string seaGitHubRelativePath = $"Sea/{regionName}.txt";
-            if (File.Exists(seaFilePath))
-            {
-                // If local file exists, load it
-                seaRoutes.AddRange(ParseSeaFile(seaFilePath));
-            }
-            else
-            {
-                // Attempt to download and decrypt from GitHub
-                string downloadedContent = DownloadFileFromGitHub(seaGitHubRelativePath);
-                if (downloadedContent != null)
-                {
-                    seaRoutes.AddRange(ParseSeaContent(downloadedContent, seaGitHubRelativePath)); // Use new ParseSeaContent
-                }
-            }
-
-            // --- Load Custom Land Routes (always prioritize local if present) ---
-            string customLandFilePath = GetCustomFilePath(regionName, RouteType.Land);
-            if (File.Exists(customLandFilePath))
-            {
-                landRoutes.AddRange(ParseLandFile(customLandFilePath));
-            }
-
-            // --- Load Custom Sea Routes (always prioritize local if present) ---
-            string customSeaFilePath = GetCustomFilePath(regionName, RouteType.Sea);
-            if (File.Exists(customSeaFilePath))
-            {
-                seaRoutes.AddRange(ParseSeaFile(customSeaFilePath));
-            }
-
-            return (landRoutes, seaRoutes);
-        }
-
-        // --- Parsing Methods (Now also with versions for content strings) ---
-        private List<LandRoute> ParseLandFile(string filePath)
-        {
-            try
-            {
-                return ParseLandContent(File.ReadAllText(filePath), filePath);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error reading land route file {Path.GetFileName(filePath)}: {ex.Message}");
-                return new List<LandRoute>();
-            }
-        }
-
-        private List<LandRoute> ParseLandContent(string content, string sourceIdentifier) // New: Parses from string content
-        {
-            List<LandRoute> routes = new List<LandRoute>();
-            string currentOriginName = null;
-            string currentOriginRegion = null;
-
-            using (StringReader reader = new StringReader(content))
-            {
-                string line;
-                while ((line = reader.ReadLine()) != null)
-                {
-                    string trimmedLine = line.Trim();
-                    if (string.IsNullOrWhiteSpace(trimmedLine))
-                    {
-                        continue;
-                    }
-
-                    if (!trimmedLine.StartsWith("\t"))
-                    {
-                        var parts = trimmedLine.Split(',');
-                        if (parts.Length == 2)
-                        {
-                            currentOriginName = parts[0].Trim();
-                            currentOriginRegion = parts[1].Trim();
-                        }
-                        else
-                        {
-                            Console.WriteLine($"Warning: Malformed origin line in {sourceIdentifier}: {line}");
-                            currentOriginName = null;
-                            currentOriginRegion = null;
-                        }
-                    }
-                    else if (currentOriginName != null && currentOriginRegion != null)
-                    {
-                        string[] parts = trimmedLine.Substring(1).Split('\t');
-
-                        if (parts.Length >= 5)
-                        {
-                            string destName = parts[0].Trim();
-                            string destRegion = parts[1].Trim();
-                            List<string> biomes = parts[2].Split(',').Select(b => b.Trim()).ToList();
-                            List<double> biomeDistances = parts[3].Split(',')
-                                                                  .Select(d => double.TryParse(d.Replace("km", "").Trim(), out double val) ? val : 0)
-                                                                  .ToList();
-                            bool isMapped = bool.TryParse(parts[4].Trim(), out bool mapped) && mapped;
-
-                            Settlement origin = new Settlement(currentOriginName, currentOriginRegion);
-                            Settlement destination = new Settlement(destName, destRegion);
-
-                            routes.Add(new LandRoute(origin, destination, biomes, biomeDistances, isMapped));
-                        }
-                        else
-                        {
-                            Console.WriteLine($"Warning: Malformed land route line in {sourceIdentifier} for origin {currentOriginName}: {line}");
-                        }
-                    }
-                }
-            }
-            return routes;
-        }
-
-        private List<SeaRoute> ParseSeaFile(string filePath)
-        {
-            try
-            {
-                return ParseSeaContent(File.ReadAllText(filePath), filePath);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error reading sea route file {Path.GetFileName(filePath)}: {ex.Message}");
-                return new List<SeaRoute>();
-            }
-        }
-
-        private List<SeaRoute> ParseSeaContent(string content, string sourceIdentifier) // New: Parses from string content
-        {
-            List<SeaRoute> routes = new List<SeaRoute>();
-            string currentOriginName = null;
-            string currentOriginRegion = null;
-
-            using (StringReader reader = new StringReader(content))
-            {
-                string line;
-                while ((line = reader.ReadLine()) != null)
-                {
-                    string trimmedLine = line.Trim();
-                    if (string.IsNullOrWhiteSpace(trimmedLine))
-                    {
-                        continue;
-                    }
-
-                    if (!trimmedLine.StartsWith("\t"))
-                    {
-                        var parts = trimmedLine.Split(',');
-                        if (parts.Length == 2)
-                        {
-                            currentOriginName = parts[0].Trim();
-                            currentOriginRegion = parts[1].Trim();
-                        }
-                        else
-                        {
-                            Console.WriteLine($"Warning: Malformed origin line in {sourceIdentifier}: {line}");
-                            currentOriginName = null;
-                            currentOriginRegion = null;
-                        }
-                    }
-                    else if (currentOriginName != null && currentOriginRegion != null)
-                    {
-                        string[] parts = trimmedLine.Substring(1).Split('\t');
-
-                        if (parts.Length >= 3)
-                        {
-                            string destName = parts[0].Trim();
-                            string destRegion = parts[1].Trim();
-                            double distance = double.TryParse(parts[2].Replace("km", "").Trim(), out double val) ? val : 0;
-
-                            Settlement origin = new Settlement(currentOriginName, currentOriginRegion);
-                            Settlement destination = new Settlement(destName, destRegion);
-
-                            routes.Add(new SeaRoute(origin, destination, distance));
-                        }
-                        else
-                        {
-                            Console.WriteLine($"Warning: Malformed sea route line in {sourceIdentifier} for origin {currentOriginName}: {line}");
-                        }
-                    }
-                }
-            }
-            return routes;
-        }
-
-        // --- Helper: Get Settlement by Name and Region ---
-        public Settlement GetSettlementByNameAndRegion(string name, string region)
-        {
-            return new Settlement(name, region);
-        }
-
-        // --- New: FindLandRoute (placeholder) ---
-        public LandRoute FindLandRoute(string originName, string originRegion, string destName, string destRegion, List<LandRoute> allLandRoutes)
-        {
-            Console.WriteLine($"DataManager.FindLandRoute called for {originName} ({originRegion}) to {destName} ({destRegion}). Implementation needed.");
-            return null;
-        }
-
-        // --- New: FindSeaRoute (placeholder) ---
-        public SeaRoute FindSeaRoute(string originName, string originRegion, string destName, string destRegion, List<SeaRoute> allSeaRoutes)
-        {
-            Console.WriteLine($"DataManager.FindSeaRoute called for {originName} ({originRegion}) to {destName} ({destRegion}). Implementation needed.");
-            return null;
-        }
-
-
-        // --- Saving Methods ---
-
-        public void SaveRoutes<T>(List<T> routes, RouteType routeType) where T : IRoute
-        {
-            string filePath = null;
-            string customFilePath = null;
-
-            if (routes == null || !routes.Any())
-            {
-                string regionName = routes.FirstOrDefault()?.Origin.Region;
-                if (string.IsNullOrEmpty(regionName)) return;
-
-                filePath = GetFilePath(regionName, routeType);
-                customFilePath = GetCustomFilePath(regionName, routeType);
-
-                if (File.Exists(filePath)) File.WriteAllText(filePath, string.Empty);
-                if (File.Exists(customFilePath)) File.WriteAllText(customFilePath, string.Empty);
-
-                Console.WriteLine($"All {routeType} routes for region {regionName} cleared from files.");
-                return;
-            }
-
-            string targetRegion = routes.First().Origin.Region;
-            filePath = GetFilePath(targetRegion, routeType);
-            customFilePath = GetCustomFilePath(targetRegion, routeType);
-
-            var groupedRoutes = routes.GroupBy(r => new { r.Origin.Name, r.Origin.Region });
-
-            try
-            {
-                string tempFilePath = filePath + ".tmp";
-                using (StreamWriter writer = new StreamWriter(tempFilePath))
-                {
-                    foreach (var group in groupedRoutes)
-                    {
-                        writer.WriteLine($"{group.Key.Name},{group.Key.Region}");
-
-                        foreach (var route in group)
-                        {
-                            if (routeType == RouteType.Land && route is LandRoute landRoute)
-                            {
-                                writer.WriteLine(landRoute.ToFileString());
-                            }
-                            else if (routeType == RouteType.Sea && route is SeaRoute seaRoute)
-                            {
-                                writer.WriteLine(seaRoute.ToFileString());
-                            }
-                        }
-                        writer.WriteLine();
-                    }
-                }
-
-                File.Delete(filePath);
-                File.Move(tempFilePath, filePath);
-                Console.WriteLine($"Successfully saved {routes.Count} {routeType} routes to {Path.GetFileName(filePath)}.");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error saving {routeType} routes to {Path.GetFileName(filePath)}: {ex.Message}");
-            }
-        }
-
-        public void SaveCustomRoute(IRoute route, RouteType routeType, string regionName)
-        {
-            string filePath = GetCustomFilePath(regionName, routeType);
-
-            try
-            {
-                bool originHeaderExists = false;
-                if (File.Exists(filePath))
-                {
-                    foreach (string line in File.ReadLines(filePath))
-                    {
-                        string trimmedLine = line.Trim();
-                        if (!trimmedLine.StartsWith("\t") && !string.IsNullOrWhiteSpace(trimmedLine))
-                        {
-                            var parts = trimmedLine.Split(',');
-                            if (parts.Length == 2 && parts[0].Trim().Equals(route.Origin.Name, StringComparison.OrdinalIgnoreCase) && parts[1].Trim().Equals(route.Origin.Region, StringComparison.OrdinalIgnoreCase))
-                            {
-                                originHeaderExists = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                using (StreamWriter writer = new StreamWriter(filePath, append: true))
-                {
-                    if (!originHeaderExists)
-                    {
-                        writer.WriteLine($"{route.Origin.Name},{route.Origin.Region}");
-                    }
-
-                    if (routeType == RouteType.Land && route is LandRoute landRoute)
-                    {
-                        writer.WriteLine(landRoute.ToFileString());
-                    }
-                    else if (routeType == RouteType.Sea && route is SeaRoute seaRoute)
-                    {
-                        writer.WriteLine(seaRoute.ToFileString());
-                    }
-                    writer.WriteLine();
-                }
-                Console.WriteLine($"Custom {routeType} route from {route.Origin.Name} to {route.Destination.Name} saved to {Path.GetFileName(filePath)}.");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error saving custom {routeType} route to {Path.GetFileName(filePath)}: {ex.Message}");
-            }
-        }
-
-        private List<SeaRoute> LoadCustomSeaRoutes(string regionName)
-        {
-            List<SeaRoute> customRoutes = new List<SeaRoute>();
-            string filePath = GetCustomFilePath(regionName, RouteType.Sea);
-            if (File.Exists(filePath))
-            {
-                customRoutes.AddRange(ParseSeaFile(filePath));
-            }
-            return customRoutes;
-        }
-
-        // --- File Validation Helpers ---
-        public bool IsFileFormatValid(string filePath, RouteType type)
-        {
             if (!File.Exists(filePath))
             {
-                Console.WriteLine($"File not found: {filePath}");
-                return false;
+                issuesFound.Add($"File not found: {filePath}. Cannot validate or repair.");
+                return issuesFound;
             }
 
-            bool isValid = true;
-            string currentOriginName = null;
-            string currentOriginRegion = null;
-            int lineNumber = 0;
-
-            foreach (string line in File.ReadLines(filePath))
+            try
             {
-                lineNumber++;
-                string trimmedLine = line.Trim();
-                if (string.IsNullOrWhiteSpace(trimmedLine))
+                string[] lines = File.ReadAllLines(filePath);
+                Settlement currentOrigin = null;
+
+                for (int lineNumber = 0; lineNumber < lines.Length; lineNumber++)
                 {
-                    continue;
-                }
+                    string originalLine = lines[lineNumber];
+                    string trimmedLine = originalLine.Trim();
+                    bool lineRepaired = false;
 
-                if (!trimmedLine.StartsWith("\t"))
-                {
-                    var parts = trimmedLine.Split(',');
-                    if (parts.Length == 2)
+                    if (string.IsNullOrWhiteSpace(trimmedLine))
                     {
-                        currentOriginName = parts[0].Trim();
-                        currentOriginRegion = parts[1].Trim();
-                        if (string.IsNullOrWhiteSpace(currentOriginName) || string.IsNullOrWhiteSpace(currentOriginRegion))
-                        {
-                            Console.WriteLine($"Validation Error (Line {lineNumber}): Origin name or region is empty. Line: '{line}'");
-                            isValid = false;
-                        }
-                    }
-                    else
-                    {
-                        Console.WriteLine($"Validation Error (Line {lineNumber}): Malformed origin line. Expected 'Name,Region'. Line: '{line}'");
-                        isValid = false;
-                        currentOriginName = null;
-                        currentOriginRegion = null;
-                    }
-                }
-                else
-                {
-                    if (currentOriginName == null || currentOriginRegion == null)
-                    {
-                        Console.WriteLine($"Validation Error (Line {lineNumber}): Route detail found without a valid origin settlement. Line: '{line}'");
-                        isValid = false;
-                    }
-
-                    string[] parts = trimmedLine.Substring(1).Split('\t');
-
-                    if (type == RouteType.Land)
-                    {
-                        if (parts.Length >= 5)
-                        {
-                            string destName = parts[0].Trim();
-                            string destRegion = parts[1].Trim();
-                            List<string> biomes = parts[2].Split(',').Select(b => b.Trim()).ToList();
-                            List<double> biomeDistances = parts[3].Split(',')
-                                                                  .Select(d => double.TryParse(d.Replace("km", "").Trim(), out double val) ? val : 0)
-                                                                  .ToList();
-                            bool isMapped;
-
-                            if (string.IsNullOrWhiteSpace(destName) || string.IsNullOrWhiteSpace(destRegion))
-                            {
-                                Console.WriteLine($"Validation Error (Line {lineNumber}): Land route destination name or region is empty. Line: '{line}'");
-                                isValid = false;
-                            }
-                            if (biomes.Any(b => string.IsNullOrWhiteSpace(b)))
-                            {
-                                Console.WriteLine($"Validation Error (Line {lineNumber}): Land route biome name is empty. Line: '{line}'");
-                                isValid = false;
-                            }
-                            if (biomeDistances.Any(d => d <= 0))
-                            {
-                                Console.WriteLine($"Validation Error (Line {lineNumber}): Land route biome distance is invalid or non-positive. Line: '{line}'");
-                                isValid = false;
-                            }
-                            if (biomes.Count != biomeDistances.Count)
-                            {
-                                Console.WriteLine($"Validation Error (Line {lineNumber}): Land route biome count and distance count mismatch. Line: '{line}'");
-                                isValid = false;
-                            }
-                            if (!bool.TryParse(parts[4].Trim(), out isMapped))
-                            {
-                                Console.WriteLine($"Validation Error (Line {lineNumber}): Land route 'IsMapped' value is invalid. Line: '{line}'");
-                                isValid = false;
-                            }
-                        }
-                        else
-                        {
-                            Console.WriteLine($"Validation Error (Line {lineNumber}): Malformed land route detail line. Expected 5 tab-separated parts. Line: '{line}'");
-                            isValid = false;
-                        }
-                    }
-                    else if (type == RouteType.Sea)
-                    {
-                        if (parts.Length >= 3)
-                        {
-                            string destName = parts[0].Trim();
-                            string destRegion = parts[1].Trim();
-                            double distance;
-
-                            if (string.IsNullOrWhiteSpace(destName) || string.IsNullOrWhiteSpace(destRegion))
-                            {
-                                Console.WriteLine($"Validation Error (Line {lineNumber}): Sea route destination name or region is empty. Line: '{line}'");
-                                isValid = false;
-                            }
-                            if (!double.TryParse(parts[2].Replace("km", "").Trim(), out distance) || distance <= 0)
-                            {
-                                Console.WriteLine($"Validation Error (Line {lineNumber}): Sea route distance is invalid or non-positive. Line: '{line}'");
-                                isValid = false;
-                            }
-                        }
-                        else
-                        {
-                            Console.WriteLine($"Validation Error (Line {lineNumber}): Malformed sea route detail line. Expected 3 tab-separated parts. Line: '{line}'");
-                            isValid = false;
-                        }
-                    }
-                }
-            }
-            return isValid;
-        }
-
-        // --- Repair Methods ---
-        public List<string> RepairFile(string filePath, RouteType type)
-        {
-            List<string> repairedLines = new List<string>();
-            List<string> issuesFound = new List<string>();
-            string currentOriginName = null;
-            string currentOriginRegion = null;
-            int lineNumber = 0;
-
-            foreach (string line in File.ReadLines(filePath))
-            {
-                lineNumber++;
-                string trimmedLine = line.Trim();
-                bool lineRepaired = false;
-
-                if (string.IsNullOrWhiteSpace(trimmedLine))
-                {
-                    repairedLines.Add(line);
-                    continue;
-                }
-
-                if (!trimmedLine.StartsWith("\t"))
-                {
-                    var parts = trimmedLine.Split(',');
-                    if (parts.Length == 2)
-                    {
-                        string name = parts[0].Trim();
-                        string region = parts[1].Trim();
-                        if (string.IsNullOrWhiteSpace(name))
-                        {
-                            issuesFound.Add($"Line {lineNumber}: Origin name is empty. Setting to 'UNKNOWN_SETTLEMENT'.");
-                            name = "UNKNOWN_SETTLEMENT";
-                            lineRepaired = true;
-                        }
-                        if (string.IsNullOrWhiteSpace(region))
-                        {
-                            issuesFound.Add($"Line {lineNumber}: Origin region is empty. Setting to 'UNKNOWN_REGION'.");
-                            region = "UNKNOWN_REGION";
-                            lineRepaired = true;
-                        }
-                        currentOriginName = name;
-                        currentOriginRegion = region;
-                        repairedLines.Add($"{currentOriginName},{currentOriginRegion}");
-                    }
-                    else
-                    {
-                        issuesFound.Add($"Line {lineNumber}: Malformed origin line. Expected 'Name,Region'. Skipping line.");
-                        currentOriginName = null;
-                        currentOriginRegion = null;
-                    }
-                }
-                else
-                {
-                    if (currentOriginName == null || currentOriginRegion == null)
-                    {
-                        issuesFound.Add($"Line {lineNumber}: Route detail found without a valid origin settlement. Skipping line.");
+                        repairedLines.Add(originalLine);
                         continue;
                     }
 
-                    string[] parts = trimmedLine.Substring(1).Split('\t');
-
-                    if (type == RouteType.Land)
+                    if (!trimmedLine.StartsWith("\t")) // This is an origin settlement header
                     {
-                        if (parts.Length < 5)
+                        string[] originParts = trimmedLine.Split('\t', StringSplitOptions.RemoveEmptyEntries);
+                        if (originParts.Length == 0 || originParts.Length > 2)
                         {
-                            issuesFound.Add($"Line {lineNumber}: Malformed land route line. Expected 5 tab-separated parts. Attempting repair with defaults.");
-                            Array.Resize(ref parts, 5);
-                            for (int i = 0; i < parts.Length; i++)
-                            {
-                                if (parts[i] == null) parts[i] = "";
-                            }
+                            issuesFound.Add($"Line {lineNumber + 1}: Malformed origin header '{originalLine}'. Skipping.");
                             lineRepaired = true;
+                            continue;
                         }
+                        string originName = textInfo.ToTitleCase(originParts[0].Trim().ToLower()); // Convert to Title Case for storing
+                        string originRegion = originParts.Length == 2 ? textInfo.ToTitleCase(originParts[1].Trim().ToLower()) : Path.GetFileNameWithoutExtension(filePath); // Convert to Title Case
+                        currentOrigin = new Settlement(originName, originRegion);
 
-                        string destName = string.IsNullOrWhiteSpace(parts[0].Trim()) ? "UNKNOWN_DEST" : parts[0].Trim();
-                        string destRegion = string.IsNullOrWhiteSpace(parts[1].Trim()) ? "UNKNOWN_REGION" : parts[1].Trim();
-                        List<string> biomes = parts[2].Split(',')
-                                                    .Select(b => string.IsNullOrWhiteSpace(b.Trim()) ? "UNKNOWN_BIOME" : b.Trim())
-                                                    .ToList();
-                        List<double> biomeDistances = parts[3].Split(',')
-                                                              .Select(d => double.TryParse(d.Replace("km", "").Trim(), out double val) && val > 0 ? val : 1.0)
-                                                              .ToList();
-                        bool isMapped = bool.TryParse(parts[4].Trim(), out bool mapped) && mapped;
-
-                        if (biomes.Count != biomeDistances.Count)
+                        // Reconstruct header with original (now title-cased) input
+                        string repairedOriginLine = originName;
+                        if (!string.IsNullOrWhiteSpace(originRegion) && !originRegion.Equals(Path.GetFileNameWithoutExtension(filePath), StringComparison.OrdinalIgnoreCase))
                         {
-                            issuesFound.Add($"Line {lineNumber}: Biome count mismatch. Repairing by truncating/padding.");
-                            int maxCount = Math.Max(biomes.Count, biomeDistances.Count);
-                            while (biomes.Count < maxCount) biomes.Add("UNKNOWN_BIOME");
-                            while (biomeDistances.Count < maxCount) biomeDistances.Add(1.0);
-                            biomes = biomes.Take(maxCount).ToList();
-                            biomeDistances = biomeDistances.Take(maxCount).ToList();
-                            lineRepaired = true;
+                            repairedOriginLine += $"\t{originRegion}";
                         }
-
-                        repairedLines.Add($"\t{destName}\t{destRegion}\t{string.Join(", ", biomes)}\t{string.Join(", ", biomeDistances.Select(d => $"{d}km"))}\t{isMapped}");
+                        repairedLines.Add(repairedOriginLine);
                     }
-                    else if (type == RouteType.Sea)
+                    else // This is a route definition line (starts with tab)
                     {
-                        if (parts.Length < 3)
+                        if (currentOrigin == null)
                         {
-                            issuesFound.Add($"Line {lineNumber}: Malformed sea route line. Expected 3 tab-separated parts. Attempting repair with defaults.");
-                            Array.Resize(ref parts, 3);
-                            for (int i = 0; i < parts.Length; i++)
-                            {
-                                if (parts[i] == null) parts[i] = "";
-                            }
+                            issuesFound.Add($"Line {lineNumber + 1}: Route definition found without a preceding origin settlement. Skipping: '{originalLine}'");
                             lineRepaired = true;
+                            continue;
                         }
 
-                        string destName = string.IsNullOrWhiteSpace(parts[0].Trim()) ? "UNKNOWN_DEST" : parts[0].Trim();
-                        string destRegion = string.IsNullOrWhiteSpace(parts[1].Trim()) ? "UNKNOWN_REGION" : parts[1].Trim();
-                        double distance = double.TryParse(parts[2].Replace("km", "").Trim(), out double val) && val > 0 ? val : 1.0;
+                        if (routeType == RouteType.Land)
+                        {
+                            var parts = trimmedLine.Split('\t', StringSplitOptions.None);
+                            if (parts.Length != 6)
+                            {
+                                issuesFound.Add($"Line {lineNumber + 1}: Invalid land route format. Expected 6 tab-separated parts, got {parts.Length}. Attempting repair.");
+                                lineRepaired = true;
+                            }
 
-                        repairedLines.Add($"\t{destName}\t{destRegion}\t{distance}km");
-                    }
+                            string destName = parts.Length > 1 ? textInfo.ToTitleCase(parts[1].Trim().ToLower()) : "Unknown_Destination";
+                            string destRegion = parts.Length > 2 ? textInfo.ToTitleCase(parts[2].Trim().ToLower()) : "Unknown_Region";
+                            List<string> biomes = new List<string>();
+                            List<double> biomeDistances = new List<double>();
+                            bool isMapped = false;
 
-                    if (lineRepaired)
-                    {
-                        issuesFound.Add($"Line {lineNumber}: Repaired '{trimmedLine}'.");
+                            if (parts.Length > 3 && !string.IsNullOrWhiteSpace(parts[3]))
+                            {
+                                biomes = parts[3].Split(',', StringSplitOptions.RemoveEmptyEntries)
+                                                .Select(s => s.Trim()) // Store as read for now
+                                                .ToList();
+                            }
+                            if (parts.Length > 4 && !string.IsNullOrWhiteSpace(parts[4]))
+                            {
+                                biomeDistances = parts[4].Split(',', StringSplitOptions.RemoveEmptyEntries)
+                                                        .Select(s => double.TryParse(s.Replace("km", "").Trim(), out double val) && val > 0 ? val : 1.0)
+                                                        .ToList();
+                            }
+                            if (parts.Length > 5 && !string.IsNullOrWhiteSpace(parts[5]))
+                            {
+                                bool.TryParse(parts[5].Trim(), out isMapped);
+                            }
+
+                            if (biomes.Count != biomeDistances.Count)
+                            {
+                                issuesFound.Add($"Line {lineNumber + 1}: Mismatch in biome and distance count. Repairing by truncating to smaller count.");
+                                lineRepaired = true;
+                                int minCount = Math.Min(biomes.Count, biomeDistances.Count);
+                                biomes = biomes.Take(minCount).ToList();
+                                biomeDistances = biomeDistances.Take(minCount).ToList();
+                            }
+                            if (!biomes.Any()) { biomes.Add("Unknown"); biomeDistances.Add(1.0); lineRepaired = true; issuesFound.Add($"Line {lineNumber + 1}: No biomes found, setting to Unknown."); }
+
+                            // Reconstruct the line with canonical formatting and proper casing for biomes
+                            repairedLines.Add(
+                                $"\t{destName}" +
+                                $"\t{destRegion}" +
+                                $"\t{string.Join(",", biomes.Select(b => textInfo.ToTitleCase(b.ToLower())))}" +
+                                $"\t{string.Join(",", biomeDistances.Select(d => $"{d}km"))}" +
+                                $"\t{isMapped}"
+                            );
+
+                            if (lineRepaired) fileChanged = true;
+                        }
+                        else if (routeType == RouteType.Sea)
+                        {
+                            var parts = trimmedLine.Split('\t', StringSplitOptions.None);
+                            if (parts.Length != 4)
+                            {
+                                issuesFound.Add($"Line {lineNumber + 1}: Invalid sea route format. Expected 4 tab-separated parts, got {parts.Length}. Attempting repair.");
+                                lineRepaired = true;
+                            }
+
+                            string destName = parts.Length > 1 ? textInfo.ToTitleCase(parts[1].Trim().ToLower()) : "Unknown_Destination";
+                            string destRegion = parts.Length > 2 ? textInfo.ToTitleCase(parts[2].Trim().ToLower()) : "Unknown_Region";
+                            double distance = (parts.Length > 3 && double.TryParse(parts[3].Replace("km", "").Trim(), out double val) && val > 0) ? val : 1.0;
+
+                            repairedLines.Add(
+                                $"\t{destName}" +
+                                $"\t{destRegion}" +
+                                $"\t{distance}km"
+                            );
+
+                            if (lineRepaired) fileChanged = true;
+                        }
                     }
                 }
+
+                if (fileChanged)
+                {
+                    File.WriteAllLines(filePath, repairedLines);
+                    issuesFound.Add($"File {filePath} was repaired and saved with updated formatting.");
+                }
             }
+            catch (Exception ex)
+            {
+                issuesFound.Add($"An error occurred during validation/repair of {filePath}: {ex.Message}");
+            }
+
             return issuesFound;
         }
 

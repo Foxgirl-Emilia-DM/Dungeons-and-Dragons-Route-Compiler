@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿// BiomeModifier.cs
+using System.Collections.Generic;
 
 namespace YourFantasyWorldProject.Classes
 {
@@ -33,7 +34,7 @@ namespace YourFantasyWorldProject.Classes
             {
                 return multiplier;
             }
-            // If a biome isn't explicitly defined, assume no extra difficulty
+            // If biome not found, assume normal difficulty
             return 1.0;
         }
     }

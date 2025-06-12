@@ -8,4 +8,18 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <Content Include="WorldData\**\*.*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+    <Exec Command="
+      echo Copying WorldData to project root...
+      xcopy &quot;$(OutDir)WorldData&quot; &quot;$(ProjectDir)WorldData&quot; /E /Y /I
+      echo WorldData copied successfully.
+    " />
+  </Target>
+  
 </Project>

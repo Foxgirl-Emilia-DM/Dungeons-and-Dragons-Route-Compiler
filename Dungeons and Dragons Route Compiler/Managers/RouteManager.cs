@@ -6,6 +6,7 @@ using System.Linq;
 using YourFantasyWorldProject.Classes;
 using YourFantasyWorldProject.Utils; // For ConsoleInput
 using YourFantasyWorldProject.Pathfinding; // Added for Pathfinder reference
+using YourFantasyWorldProject.Managers; // Ensure DataManager is accessible
 
 namespace YourFantasyWorldProject.Managers
 {
@@ -29,378 +30,32 @@ namespace YourFantasyWorldProject.Managers
 
         // --- Internal Helper: Load All Routes ---
         // This method should be called periodically or when data is modified outside the manager
-        private void LoadAllRoutes()
+        private void LoadAllRoutes() // This method remains private as it's an internal helper
         {
             _allLandRoutes.Clear();
             _allSeaRoutes.Clear();
 
-            var allRegions = _dataManager.GetAllRegionNames();
+            var allRegions = _dataManager.GetAllRegions();
+            Console.WriteLine($"Loading routes from {allRegions.Count} regions...");
+
             foreach (var region in allRegions)
             {
-                var (land, sea) = _dataManager.LoadRoutes(region);
-                _allLandRoutes.AddRange(land);
-                _allSeaRoutes.AddRange(sea);
+                Console.WriteLine($"  Loading routes for region: {region}");
+                _allLandRoutes.AddRange(_dataManager.LoadLandRoutesFromRegionFile(region));
+                _allSeaRoutes.AddRange(_dataManager.LoadSeaRoutesFromRegionFile(region));
             }
 
-            Console.WriteLine($"Loaded {_allLandRoutes.Count} land routes and {_allSeaRoutes.Count} sea routes across {allRegions.Count()} regions.");
+            Console.WriteLine($"Finished loading. Total land routes: {_allLandRoutes.Count}, Total sea routes: {_allSeaRoutes.Count}.");
+            RebuildGraph(); // Rebuild graph after loading all routes
         }
 
-        // --- Add New Route ---
-        public void AddRoute()
+        /// <summary>
+        /// Displays the currently loaded routes and settlements.
+        /// </summary>
+        public void DisplayLoadedData()
         {
-            Console.WriteLine("\n--- Add New Route ---");
-            RouteType type = ConsoleInput.GetEnumInput<RouteType>("Select route type:");
-
-            Console.WriteLine("Enter Origin Settlement Name and Region:");
-            string originName = ConsoleInput.GetStringInput("Origin Settlement Name: ");
-            string originRegion = ConsoleInput.GetStringInput("Origin Region Name: ");
-            Settlement origin = _dataManager.GetSettlementByNameAndRegion(originName, originRegion);
-
-            Console.WriteLine("Enter Destination Settlement Name and Region:");
-            string destName = ConsoleInput.GetStringInput("Destination Settlement Name: ");
-            string destRegion = ConsoleInput.GetStringInput("Destination Region Name: ");
-            Settlement destination = _dataManager.GetSettlementByNameAndRegion(destName, destRegion);
-
-            if (origin == null || destination == null)
-            {
-                Console.WriteLine("Invalid origin or destination settlement. Please ensure both exist.");
-                return;
-            }
-
-            bool isCustom = ConsoleInput.GetBooleanInput("Is this a custom route (Y/N)?");
-
-            if (type == RouteType.Land)
-            {
-                List<string> biomes = new List<string>();
-                List<double> biomeDistances = new List<double>();
-                bool addMoreBiomes = true;
-                while (addMoreBiomes)
-                {
-                    string biome = ConsoleInput.GetStringInput("Enter biome name (e.g., GRASSLANDS, WETLANDS):");
-                    double distance = ConsoleInput.GetDoubleInput($"Enter distance in km for {biome}:", 0.1);
-                    biomes.Add(biome);
-                    biomeDistances.Add(distance);
-                    addMoreBiomes = ConsoleInput.GetBooleanInput("Add another biome segment (Y/N)?");
-                }
-                bool isMapped = ConsoleInput.GetBooleanInput("Is this route mapped (Y/N)?");
-
-                LandRoute newRoute = new LandRoute(origin, destination, biomes, biomeDistances, isMapped);
-
-                if (isCustom)
-                {
-                    _dataManager.SaveCustomRoute(newRoute, RouteType.Land, origin.Region);
-                }
-                else
-                {
-                    // Add to current list for immediate use
-                    _allLandRoutes.Add(newRoute);
-                    // Save all routes of this region (including the new one)
-                    // Ensure you're only saving the routes relevant to the origin region.
-                    _dataManager.SaveRoutes(_allLandRoutes.Where(r => r.Origin.Region.Equals(origin.Region, StringComparison.OrdinalIgnoreCase)).ToList(), RouteType.Land);
-                }
-            }
-            else // RouteType.Sea
-            {
-                double distance = ConsoleInput.GetDoubleInput("Enter distance in kilometers: ", 0.1);
-                SeaRoute newRoute = new SeaRoute(origin, destination, distance);
-
-                if (isCustom)
-                {
-                    _dataManager.SaveCustomRoute(newRoute, RouteType.Sea, origin.Region);
-                }
-                else
-                {
-                    // Add to current list for immediate use
-                    _allSeaRoutes.Add(newRoute);
-                    // Save all routes of this region (including the new one)
-                    // Ensure you're only saving the routes relevant to the origin region.
-                    _dataManager.SaveRoutes(_allSeaRoutes.Where(r => r.Origin.Region.Equals(origin.Region, StringComparison.OrdinalIgnoreCase)).ToList(), RouteType.Sea);
-                }
-            }
-            Console.WriteLine("Route added successfully! Remember to rebuild the graph for it to be included in pathfinding.");
-            // RebuildGraph(); // Handled by Program.cs now
-        }
-
-        // --- Remove Route ---
-        public void RemoveRoute()
-        {
-            Console.WriteLine("\n--- Remove Route ---");
-            RouteType type = ConsoleInput.GetEnumInput<RouteType>("Select route type to remove:");
-
-            Console.WriteLine("Enter Origin Settlement Name and Region for the route to remove:");
-            string originName = ConsoleInput.GetStringInput("Origin Settlement Name: ");
-            string originRegion = ConsoleInput.GetStringInput("Origin Region Name: ");
-
-            Console.WriteLine("Enter Destination Settlement Name and Region for the route to remove:");
-            string destName = ConsoleInput.GetStringInput("Destination Settlement Name: ");
-            string destRegion = ConsoleInput.GetStringInput("Destination Region Name: ");
-
-            bool removed = false;
-
-            if (type == RouteType.Land)
-            {
-                var routesToRemove = _allLandRoutes.Where(r =>
-                    r.Origin.Name.Equals(originName, StringComparison.OrdinalIgnoreCase) &&
-                    r.Origin.Region.Equals(originRegion, StringComparison.OrdinalIgnoreCase) &&
-                    r.Destination.Name.Equals(destName, StringComparison.OrdinalIgnoreCase) &&
-                    r.Destination.Region.Equals(destRegion, StringComparison.OrdinalIgnoreCase)
-                ).ToList();
-
-                if (routesToRemove.Any())
-                {
-                    foreach (var route in routesToRemove)
-                    {
-                        _allLandRoutes.Remove(route);
-                        removed = true;
-                    }
-                    // Save the modified list for the region
-                    _dataManager.SaveRoutes(_allLandRoutes.Where(r => r.Origin.Region.Equals(originRegion, StringComparison.OrdinalIgnoreCase)).ToList(), RouteType.Land);
-                    Console.WriteLine("Land route(s) removed and file updated.");
-                }
-            }
-            else // RouteType.Sea
-            {
-                var routesToRemove = _allSeaRoutes.Where(r =>
-                    r.Origin.Name.Equals(originName, StringComparison.OrdinalIgnoreCase) &&
-                    r.Origin.Region.Equals(originRegion, StringComparison.OrdinalIgnoreCase) &&
-                    r.Destination.Name.Equals(destName, StringComparison.OrdinalIgnoreCase) &&
-                    r.Destination.Region.Equals(destRegion, StringComparison.OrdinalIgnoreCase)
-                ).ToList();
-
-                if (routesToRemove.Any())
-                {
-                    foreach (var route in routesToRemove)
-                    {
-                        _allSeaRoutes.Remove(route);
-                        removed = true;
-                    }
-                    // Save the modified list for the region
-                    _dataManager.SaveRoutes(_allSeaRoutes.Where(r => r.Origin.Region.Equals(originRegion, StringComparison.OrdinalIgnoreCase)).ToList(), RouteType.Sea);
-                    Console.WriteLine("Sea route(s) removed and file updated.");
-                }
-            }
-
-            if (!removed)
-            {
-                Console.WriteLine("No matching route found to remove.");
-            }
-            Console.WriteLine("Remember to rebuild the graph for changes to take effect in pathfinding.");
-            // RebuildGraph(); // Handled by Program.cs now
-        }
-
-        // --- Edit Route ---
-        public void EditRoute()
-        {
-            Console.WriteLine("\n--- Edit Route ---");
-            RouteType type = ConsoleInput.GetEnumInput<RouteType>("Select route type to edit:");
-
-            Console.WriteLine("Enter Origin Settlement Name and Region for the route to edit:");
-            string originName = ConsoleInput.GetStringInput("Origin Settlement Name: ");
-            string originRegion = ConsoleInput.GetStringInput("Origin Region Name: ");
-
-            Console.WriteLine("Enter Destination Settlement Name and Region for the route to edit:");
-            string destName = ConsoleInput.GetStringInput("Destination Settlement Name: ");
-            string destRegion = ConsoleInput.GetStringInput("Destination Region Name: ");
-
-            IRoute routeToEdit = null;
-
-            if (type == RouteType.Land)
-            {
-                routeToEdit = _allLandRoutes.FirstOrDefault(r =>
-                    r.Origin.Name.Equals(originName, StringComparison.OrdinalIgnoreCase) &&
-                    r.Origin.Region.Equals(originRegion, StringComparison.OrdinalIgnoreCase) &&
-                    r.Destination.Name.Equals(destName, StringComparison.OrdinalIgnoreCase) &&
-                    r.Destination.Region.Equals(destRegion, StringComparison.OrdinalIgnoreCase)
-                );
-            }
-            else // RouteType.Sea
-            {
-                routeToEdit = _allSeaRoutes.FirstOrDefault(r =>
-                    r.Origin.Name.Equals(originName, StringComparison.OrdinalIgnoreCase) &&
-                    r.Origin.Region.Equals(originRegion, StringComparison.OrdinalIgnoreCase) &&
-                    r.Destination.Name.Equals(destName, StringComparison.OrdinalIgnoreCase) &&
-                    r.Destination.Region.Equals(destRegion, StringComparison.OrdinalIgnoreCase)
-                );
-            }
-
-            if (routeToEdit == null)
-            {
-                Console.WriteLine("No matching route found to edit.");
-                return;
-            }
-
-            Console.WriteLine($"Found route: {routeToEdit}");
-
-            if (type == RouteType.Land && routeToEdit is LandRoute landRoute)
-            {
-                // Prompt for new biome data
-                List<string> newBiomes = new List<string>();
-                List<double> newBiomeDistances = new List<double>();
-                bool addMoreBiomes = true;
-                while (addMoreBiomes)
-                {
-                    string biome = ConsoleInput.GetStringInput("Enter new biome name (leave empty to keep current):");
-                    if (string.IsNullOrWhiteSpace(biome))
-                    {
-                        Console.WriteLine("Skipping biome entry.");
-                    }
-                    else
-                    {
-                        double distance = ConsoleInput.GetDoubleInput($"Enter distance in km for {biome}:", 0.1);
-                        newBiomes.Add(biome);
-                        newBiomeDistances.Add(distance);
-                    }
-                    addMoreBiomes = ConsoleInput.GetBooleanInput("Add another biome segment (Y/N)?");
-                }
-
-                if (newBiomes.Any() && newBiomes.Count == newBiomeDistances.Count)
-                {
-                    landRoute.Biomes = newBiomes;
-                    landRoute.BiomeDistances = newBiomeDistances;
-                    Console.WriteLine("Biomes and distances updated.");
-                }
-                else if (newBiomes.Any())
-                {
-                    Console.WriteLine("Warning: Biome and distance counts mismatch. Biome data not updated.");
-                }
-
-
-                bool newIsMapped = ConsoleInput.GetBooleanInput($"Is this route mapped (current: {landRoute.IsMapped}) (Y/N)?");
-                landRoute.IsMapped = newIsMapped;
-                Console.WriteLine("IsMapped status updated.");
-
-                // Save the modified list for the region
-                _dataManager.SaveRoutes(_allLandRoutes.Where(r => r.Origin.Region.Equals(originRegion, StringComparison.OrdinalIgnoreCase)).ToList(), RouteType.Land);
-            }
-            else if (type == RouteType.Sea && routeToEdit is SeaRoute seaRoute)
-            {
-                double newDistance = ConsoleInput.GetDoubleInput($"Enter new distance in kilometers (current: {seaRoute.Distance}km): ", 0.1);
-                seaRoute.Distance = newDistance;
-                Console.WriteLine("Distance updated.");
-
-                // Save the modified list for the region
-                _dataManager.SaveRoutes(_allSeaRoutes.Where(r => r.Origin.Region.Equals(originRegion, StringComparison.OrdinalIgnoreCase)).ToList(), RouteType.Sea);
-            }
-
-            Console.WriteLine("Route edited successfully! Remember to rebuild the graph for changes to take effect in pathfinding.");
-            // RebuildGraph(); // Handled by Program.cs now
-        }
-
-        // --- File Management ---
-        public void FileValidation()
-        {
-            Console.WriteLine("\n--- File Validation ---");
-            Console.WriteLine("Enter Region Name to validate files for:");
-            string regionName = ConsoleInput.GetStringInput("Region Name: ");
-
-            string landFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WorldData", "Land", $"{regionName}.txt");
-            string seaFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WorldData", "Sea", $"{regionName}.txt");
-            string customLandFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WorldData", "CustomRoutes", "Land", $"Custom_{regionName}.txt");
-            string customSeaFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WorldData", "CustomRoutes", "Sea", $"Custom_{regionName}.txt");
-
-
-            Console.WriteLine($"\nValidating Land file for {regionName}...");
-            bool landValid = _dataManager.IsFileFormatValid(landFilePath, RouteType.Land);
-            Console.WriteLine($"Land file is {(landValid ? "VALID" : "INVALID")}");
-
-            Console.WriteLine($"\nValidating Sea file for {regionName}...");
-            bool seaValid = _dataManager.IsFileFormatValid(seaFilePath, RouteType.Sea);
-            Console.WriteLine($"Sea file is {(seaValid ? "VALID" : "INVALID")}");
-
-            Console.WriteLine($"\nValidating Custom Land file for {regionName}...");
-            bool customLandValid = _dataManager.IsFileFormatValid(customLandFilePath, RouteType.Land);
-            Console.WriteLine($"Custom Land file is {(customLandValid ? "VALID" : "INVALID")}");
-
-            Console.WriteLine($"\nValidating Custom Sea file for {regionName}...");
-            bool customSeaValid = _dataManager.IsFileFormatValid(customSeaFilePath, RouteType.Sea);
-            Console.WriteLine($"Custom Sea file is {(customSeaValid ? "VALID" : "INVALID")}");
-        }
-
-        public void FileRepair()
-        {
-            Console.WriteLine("\n--- File Repair ---");
-            Console.WriteLine("Enter Region Name to repair files for:");
-            string regionName = ConsoleInput.GetStringInput("Region Name: ");
-
-            string landFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WorldData", "Land", $"{regionName}.txt");
-            string seaFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WorldData", "Sea", $"{regionName}.txt");
-            string customLandFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WorldData", "CustomRoutes", "Land", $"Custom_{regionName}.txt");
-            string customSeaFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WorldData", "CustomRoutes", "Sea", $"Custom_{regionName}.txt");
-
-            Console.WriteLine($"\nAttempting to repair Land file: {Path.GetFileName(landFilePath)}");
-            List<string> landIssues = _dataManager.RepairFile(landFilePath, RouteType.Land);
-            if (landIssues.Any())
-            {
-                Console.WriteLine("Land file repair completed with issues:");
-                foreach (var issue in landIssues) Console.WriteLine($"- {issue}");
-            }
-            else
-            {
-                Console.WriteLine("Land file repaired with no issues found.");
-            }
-
-            Console.WriteLine($"\nAttempting to repair Sea file: {Path.GetFileName(seaFilePath)}");
-            List<string> seaIssues = _dataManager.RepairFile(seaFilePath, RouteType.Sea);
-            if (seaIssues.Any())
-            {
-                Console.WriteLine("Sea file repair completed with issues:");
-                foreach (var issue in seaIssues) Console.WriteLine($"- {issue}");
-            }
-            else
-            {
-                Console.WriteLine("Sea file repaired with no issues found.");
-            }
-
-            Console.WriteLine($"\nAttempting to repair Custom Land file: {Path.GetFileName(customLandFilePath)}");
-            List<string> customLandIssues = _dataManager.RepairFile(customLandFilePath, RouteType.Land);
-            if (customLandIssues.Any())
-            {
-                Console.WriteLine("Custom Land file repair completed with issues:");
-                foreach (var issue in customLandIssues) Console.WriteLine($"- {issue}");
-            }
-            else
-            {
-                Console.WriteLine("Custom Land file repaired with no issues found.");
-            }
-
-            Console.WriteLine($"\nAttempting to repair Custom Sea file: {Path.GetFileName(customSeaFilePath)}");
-            List<string> customSeaIssues = _dataManager.RepairFile(customSeaFilePath, RouteType.Sea);
-            if (customSeaIssues.Any())
-            {
-                Console.WriteLine("Custom Sea file repair completed with issues:");
-                foreach (var issue in customSeaIssues) Console.WriteLine($"- {issue}");
-            }
-            else
-            {
-                Console.WriteLine("Custom Sea file repaired with no issues found.");
-            }
-
-            Console.WriteLine("\nFile repair process finished. It's recommended to validate files after repair.");
-            LoadAllRoutes(); // Reload data after repair to reflect changes in memory
-            // RebuildGraph(); // Handled by Program.cs now
-        }
-
-        public void FilePrint()
-        {
-            Console.WriteLine("\n--- File Print ---");
-            Console.WriteLine("Enter Region Name to print files for:");
-            string regionName = ConsoleInput.GetStringInput("Region Name: ");
-
-            string landFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WorldData", "Land", $"{regionName}.txt");
-            string seaFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WorldData", "Sea", $"{regionName}.txt");
-            string customLandFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WorldData", "CustomRoutes", "Land", $"Custom_{regionName}.txt");
-            string customSeaFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WorldData", "CustomRoutes", "Sea", $"Custom_{regionName}.txt");
-
-            _dataManager.PrintFileContent(landFilePath);
-            _dataManager.PrintFileContent(seaFilePath);
-            _dataManager.PrintFileContent(customLandFilePath);
-            _dataManager.PrintFileContent(customSeaFilePath);
-        }
-
-        public void FileCheck()
-        {
-            Console.WriteLine("\n--- File Check ---");
-            LoadAllRoutes(); // Ensure all routes are loaded
+            Console.WriteLine("\n--- Currently Loaded Route Data ---");
+            LoadAllRoutes(); // Ensure all routes are loaded before displaying
             Console.WriteLine($"Current in-memory data: {_allLandRoutes.Count} land routes and {_allSeaRoutes.Count} sea routes.");
 
             // Calculate and display unique settlements
@@ -434,6 +89,203 @@ namespace YourFantasyWorldProject.Managers
         {
             _pathfinder.BuildGraph(_allLandRoutes, _allSeaRoutes);
             Console.WriteLine("Graph rebuilt successfully.");
+        }
+
+        // --- New Methods to address Program.cs errors and user requests ---
+
+        /// <summary>
+        /// Allows the DM to add a new route (land or sea) with an option to save as custom or default.
+        /// </summary>
+        public void AddRoute()
+        {
+            Console.WriteLine("\n--- Add New Route ---");
+            Console.WriteLine("Select Route Type:");
+            Console.WriteLine("1. Land Route");
+            Console.WriteLine("2. Sea Route");
+            string choice = ConsoleInput.GetStringInput("Enter your choice: ");
+
+            switch (choice)
+            {
+                case "1":
+                    _pathfinder.CreateLandRoute(); // Call the updated method
+                    break;
+                case "2":
+                    _pathfinder.CreateSeaRoute(); // Call the updated method
+                    break;
+                default:
+                    Console.WriteLine("Invalid route type choice.");
+                    break;
+            }
+            LoadAllRoutes(); // Reload all routes to include the newly added one
+        }
+
+        /// <summary>
+        /// Placeholder for removing an existing route.
+        /// This would involve identifying the route (e.g., by origin/destination/type),
+        /// removing it from in-memory lists, and then updating the file via DataManager.
+        /// </summary>
+        public void RemoveRoute()
+        {
+            Console.WriteLine("\n--- Remove Route (Not Implemented) ---");
+            Console.WriteLine("This feature is not yet implemented. Future development would allow removing routes by specifying origin, destination, and type.");
+            // Implementation would involve:
+            // 1. Prompting for origin, destination, and route type.
+            // 2. Finding the specific route in _allLandRoutes or _allSeaRoutes.
+            // 3. Removing it from the list.
+            // 4. Calling a method in DataManager to rewrite the relevant file without the removed route.
+            // 5. Calling LoadAllRoutes() and RebuildGraph().
+        }
+
+        /// <summary>
+        /// Placeholder for editing an existing route.
+        /// This would involve identifying the route, allowing modifications,
+        /// and then updating the file via DataManager.
+        /// </summary>
+        public void EditRoute()
+        {
+            Console.WriteLine("\n--- Edit Route (Not Implemented) ---");
+            Console.WriteLine("This feature is not yet implemented. Future development would allow editing route details (e.g., distance, biomes).");
+            // Implementation would involve:
+            // 1. Prompting for route to edit (similar to RemoveRoute).
+            // 2. Displaying current route details.
+            // 3. Prompting for new details.
+            // 4. Updating the route object and then rewriting the file via DataManager.
+            // 5. Calling LoadAllRoutes() and RebuildGraph().
+        }
+
+        /// <summary>
+        /// Prompts for a region file and performs validation on it.
+        /// </summary>
+        public void FileValidation()
+        {
+            Console.WriteLine("\n--- File Validation ---");
+            string regionName = ConsoleInput.GetStringInput("Enter region name for file validation: ");
+            RouteType routeType = ConsoleInput.GetEnumInput<RouteType>("Select route type to validate:");
+
+            // Determine file path based on type and preference (checking default then custom)
+            string filePath = GetRouteFilePath(regionName, routeType, preferCustom: false) ?? // Check default first
+                              GetRouteFilePath(regionName, routeType, preferCustom: true);   // Then check custom
+
+            if (filePath == null)
+            {
+                Console.WriteLine($"Could not find a file for region '{regionName}' of type '{routeType}'.");
+                return;
+            }
+
+            Console.WriteLine($"Validating file: {filePath}");
+            List<string> issues = _dataManager.ValidateAndRepairFile(filePath, routeType);
+
+            if (issues.Any())
+            {
+                Console.WriteLine("\nValidation Issues Found:");
+                foreach (var issue in issues)
+                {
+                    Console.WriteLine($"- {issue}");
+                }
+            }
+            else
+            {
+                Console.WriteLine("File appears valid and no issues were found.");
+            }
+        }
+
+        /// <summary>
+        /// Prompts for a region file and attempts to repair it.
+        /// Calls the same DataManager method as validation, which handles repair internally.
+        /// </summary>
+        public void FileRepair()
+        {
+            Console.WriteLine("\n--- File Repair ---");
+            string regionName = ConsoleInput.GetStringInput("Enter region name for file repair: ");
+            RouteType routeType = ConsoleInput.GetEnumInput<RouteType>("Select route type to repair:");
+
+            string filePath = GetRouteFilePath(regionName, routeType, preferCustom: false) ??
+                              GetRouteFilePath(regionName, routeType, preferCustom: true);
+
+            if (filePath == null)
+            {
+                Console.WriteLine($"Could not find a file for region '{regionName}' of type '{routeType}'.");
+                return;
+            }
+
+            Console.WriteLine($"Attempting to repair file: {filePath}");
+            List<string> issues = _dataManager.ValidateAndRepairFile(filePath, routeType); // This method also performs repairs
+
+            if (issues.Any())
+            {
+                Console.WriteLine("\nRepair Report:");
+                foreach (var issue in issues)
+                {
+                    Console.WriteLine($"- {issue}");
+                }
+            }
+            else
+            {
+                Console.WriteLine("File either already valid or no repairs were possible/necessary.");
+            }
+            LoadAllRoutes(); // Reload all routes after potential repair
+        }
+
+
+        /// <summary>
+        /// Prompts for a region file and prints its content to the console.
+        /// </summary>
+        public void FilePrint()
+        {
+            Console.WriteLine("\n--- Print File Content ---");
+            string regionName = ConsoleInput.GetStringInput("Enter region name to print file content for: ");
+            RouteType routeType = ConsoleInput.GetEnumInput<RouteType>("Select route type to print:");
+
+            string filePath = GetRouteFilePath(regionName, routeType, preferCustom: false) ??
+                              GetRouteFilePath(regionName, routeType, preferCustom: true);
+
+            if (filePath == null)
+            {
+                Console.WriteLine($"Could not find a file for region '{regionName}' of type '{routeType}'.");
+                return;
+            }
+
+            _dataManager.PrintFileContent(filePath);
+        }
+
+        /// <summary>
+        /// Helper method to construct and check file paths.
+        /// </summary>
+        /// <param name="regionName">Name of the region.</param>
+        /// <param name="routeType">Type of route (Land/Sea).</param>
+        /// <param name="preferCustom">If true, checks custom path first. If false, checks default path first.</param>
+        /// <returns>The existing file path, or null if not found.</returns>
+        private string GetRouteFilePath(string regionName, RouteType routeType, bool preferCustom)
+        {
+            string baseDataPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WorldData");
+            string defaultPath = (routeType == RouteType.Land) ?
+                                  Path.Combine(baseDataPath, "LandRoutes", $"{regionName.ToUpperInvariant()}.txt") :
+                                  Path.Combine(baseDataPath, "SeaRoutes", $"{regionName.ToUpperInvariant()}.txt");
+            string customPath = (routeType == RouteType.Land) ?
+                                 Path.Combine(baseDataPath, "CustomRoutes", "Land", $"{regionName.ToUpperInvariant()}.txt") :
+                                 Path.Combine(baseDataPath, "CustomRoutes", "Sea", $"{regionName.ToUpperInvariant()}.txt");
+
+            if (preferCustom)
+            {
+                if (File.Exists(customPath)) return customPath;
+                if (File.Exists(defaultPath)) return defaultPath;
+            }
+            else
+            {
+                if (File.Exists(defaultPath)) return defaultPath;
+                if (File.Exists(customPath)) return customPath;
+            }
+            return null;
+        }
+
+
+        /// <summary>
+        /// Displays information about the total unique settlements loaded in memory.
+        /// This is essentially a wrapper for DisplayLoadedData.
+        /// </summary>
+        public void FileCheck()
+        {
+            DisplayLoadedData();
         }
     }
 }

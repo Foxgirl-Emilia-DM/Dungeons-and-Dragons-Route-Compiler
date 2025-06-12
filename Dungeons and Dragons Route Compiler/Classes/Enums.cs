@@ -1,4 +1,5 @@
-﻿namespace YourFantasyWorldProject.Classes
+﻿// Enums.cs
+namespace YourFantasyWorldProject.Classes
 {
     // Defines the type of route (Land or Sea)
     public enum RouteType

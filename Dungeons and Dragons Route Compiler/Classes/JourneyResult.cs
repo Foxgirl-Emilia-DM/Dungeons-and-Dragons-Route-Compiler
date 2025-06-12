@@ -34,50 +34,45 @@ namespace YourFantasyWorldProject.Classes
         {
             if (!PathFound)
             {
-                // MODIFIED: Use Region instead of Country for console output
+                // MODIFIED: Use Region instead of Country for display
                 Console.WriteLine($"No path found from {Origin.Name} ({Origin.Region}) to {Destination.Name} ({Destination.Region}).");
                 return;
             }
 
-            Console.WriteLine("\n--- Journey Summary ---");
-            // MODIFIED: Use Region instead of Country for console output
-            Console.WriteLine($"Route from {Origin.Name} ({Origin.Region}) to {Destination.Name} ({Destination.Region})");
+            Console.WriteLine("\n--- Journey Details ---");
+            Console.WriteLine($"From: {Origin.Name} ({Origin.Region})");
+            Console.WriteLine($"To: {Destination.Name} ({Destination.Region})");
             Console.WriteLine($"Total Distance: {TotalDistanceKm:F2} km");
-            Console.WriteLine($"Total Estimated Time: {TotalTimeHours:F2} hours ({TotalTimeHours / 24.0:F2} days)");
-            Console.WriteLine($"Total Estimated Gold Cost: {TotalCost:F2} gold");
+            Console.WriteLine($"Total Travel Time: {TotalTimeHours:F2} hours ({TotalTimeHours / 24:F2} days)");
+            Console.WriteLine($"Total Estimated Cost: {TotalCost:F2} gold");
 
+            Console.WriteLine("\n--- Resource Consumption ---");
             if (EstimatedResourceCosts.Any())
             {
-                Console.WriteLine("\n--- Estimated Resource Consumption ---");
-                foreach (var resource in EstimatedResourceCosts)
+                foreach (var cost in EstimatedResourceCosts)
                 {
-                    Console.WriteLine($"- {resource}");
+                    Console.WriteLine($" - {cost}");
                 }
             }
+            else
+            {
+                Console.WriteLine("No specific resource costs estimated for this journey.");
+            }
 
-            Console.WriteLine("\n--- Detailed Path ---");
+
+            Console.WriteLine("\n--- Path Segments ---");
             for (int i = 0; i < PathSegments.Count; i++)
             {
                 var segment = PathSegments[i];
-                string routeType = segment.RouteUsed is LandRoute ? "Land Route" : "Sea Route";
-                string biomeInfo = segment.BiomesTraversed.Any() ? $" (Biomes: {string.Join(", ", segment.BiomesTraversed)})" : "";
-                string routeDetails = "";
-
-                if (segment.RouteUsed is LandRoute lr)
-                {
-                    routeDetails = $" (Mapped: {lr.IsMapped})";
-                }
-                else if (segment.RouteUsed is SeaRoute sr)
-                {
-                    // No specific details for basic SeaRoute other than distance
-                }
+                string routeType = (segment.RouteUsed is LandRoute) ? "Land Route" : "Sea Route";
+                string biomesInfo = (segment.RouteUsed is LandRoute landRoute && landRoute.Biomes.Any())
+                                    ? $" (Biomes: {string.Join(", ", landRoute.Biomes)})"
+                                    : "";
 
                 Console.WriteLine(
-                    // MODIFIED: Use Region instead of Country for console output
-                    $"{i + 1}. From {segment.Start.Name} ({segment.Start.Region}) to {segment.End.Name} ({segment.End.Region}) " +
-                    $"(via {routeType}){biomeInfo}{routeDetails}:" + Environment.NewLine +
-                    $"   - Distance: {segment.DistanceKm:F2} km" + Environment.NewLine +
-                    $"   - Time: {segment.TimeHours:F2} hours" + Environment.NewLine +
+                    $"Segment {i + 1}: {segment.Start.Name} ({segment.Start.Region}) --({routeType})--> {segment.End.Name} ({segment.End.Region}){biomesInfo}\n" +
+                    $"   - Distance: {segment.DistanceKm:F2} km\n" +
+                    $"   - Time: {segment.TimeHours:F2} hours\n" +
                     $"   - Cost: {segment.Cost:F2} gold"
                 );
             }
@@ -121,7 +116,7 @@ namespace YourFantasyWorldProject.Classes
 
         public override string ToString()
         {
-            return $"{ResourceName}: {Quantity}";
+            return $"{ResourceName}: {Quantity:F2}";
         }
     }
 }

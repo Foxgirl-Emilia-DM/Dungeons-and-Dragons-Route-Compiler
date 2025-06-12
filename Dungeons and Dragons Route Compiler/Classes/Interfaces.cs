@@ -1,4 +1,5 @@
-﻿using YourFantasyWorldProject.Classes; // Ensure Settlement is recognized
+﻿// Interfaces.cs
+using YourFantasyWorldProject.Classes; // Ensure Settlement is recognized
 
 namespace YourFantasyWorldProject.Classes
 {

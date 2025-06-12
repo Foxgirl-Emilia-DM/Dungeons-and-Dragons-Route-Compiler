@@ -1,5 +1,7 @@
-﻿using System;
+﻿// MinHeap.cs
+using System;
 using System.Collections.Generic;
+using System.Linq; // Added for Any() in Contains
 
 namespace YourFantasyWorldProject.Pathfinding
 {
@@ -42,18 +44,23 @@ namespace YourFantasyWorldProject.Pathfinding
                 throw new InvalidOperationException("PriorityQueue is empty.");
             }
 
+            // Get the root element (smallest priority)
             T result = _elements[0].Value;
+
+            // Move the last element to the root
             int lastIndex = _elements.Count - 1;
-            _elements[0] = _elements[lastIndex]; // Move last element to root
-            _elements.RemoveAt(lastIndex); // Remove last element
-            SinkDown(0); // Restore heap property
+            _elements[0] = _elements[lastIndex];
+            _elements.RemoveAt(lastIndex); // Remove the last element
+
+            // If there are still elements, sink down the new root
+            if (_elements.Count > 0)
+            {
+                SinkDown(0);
+            }
 
             return result;
         }
 
-        // Used to update the priority of an existing item (for Dijkstra's "relaxing edges")
-        // This is a simplified version; a more optimized version would use a Dictionary
-        // to quickly find the index of the item. For our graph size, this will be okay.
         public void UpdatePriority(T item, double newPriority)
         {
             for (int i = 0; i < _elements.Count; i++)
@@ -65,13 +72,12 @@ namespace YourFantasyWorldProject.Pathfinding
                         _elements[i].Priority = newPriority;
                         BubbleUp(i);
                     }
-                    // If new priority is higher, it will eventually sink down if needed,
-                    // but Dijkstra's only relaxes to lower distances.
-                    return;
+                    // If new priority is greater, it might need to sink down, but for Dijkstra
+                    // we only update if new priority is smaller.
+                    // If it was possible to increase priority, we would call SinkDown(i) here.
+                    break;
                 }
             }
-            // If item not found, enqueue it (though Dijkstra's usually only updates existing)
-            Enqueue(item, newPriority);
         }
 
         private void BubbleUp(int index)
@@ -97,16 +103,19 @@ namespace YourFantasyWorldProject.Pathfinding
             int rightChildIndex = 2 * index + 2;
             int smallestChildIndex = index;
 
+            // Check if left child exists and has a smaller priority
             if (leftChildIndex < _elements.Count && _elements[leftChildIndex].Priority < _elements[smallestChildIndex].Priority)
             {
                 smallestChildIndex = leftChildIndex;
             }
 
+            // Check if right child exists and has a smaller priority than current smallest
             if (rightChildIndex < _elements.Count && _elements[rightChildIndex].Priority < _elements[smallestChildIndex].Priority)
             {
                 smallestChildIndex = rightChildIndex;
             }
 
+            // If the smallest child is not the current node, swap and continue sinking down
             if (smallestChildIndex != index)
             {
                 Swap(index, smallestChildIndex);
