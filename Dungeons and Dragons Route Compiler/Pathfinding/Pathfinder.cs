@@ -80,23 +80,35 @@ namespace YourFantasyWorldProject.Pathfinding
             // Add land routes to the graph
             foreach (var route in landRoutes)
             {
+                // Ensure origin and destination settlements are in the graph dictionary
                 if (!_graph.ContainsKey(route.Origin)) _graph[route.Origin] = new List<Edge>();
                 if (!_graph.ContainsKey(route.Destination)) _graph[route.Destination] = new List<Edge>();
 
                 double baseTimeHours = route.TotalDistance / (NORMAL_WALK_MPH * MPH_TO_KMH_FACTOR);
 
+                // Add forward route A -> B
                 _graph[route.Origin].Add(new Edge(route.Destination, baseTimeHours, route));
+                // Add reverse route B -> A (assuming land routes are bidirectional)
+                _graph[route.Destination].Add(new Edge(route.Origin, baseTimeHours, route));
             }
 
             // Add sea routes to the graph
             foreach (var route in seaRoutes)
             {
+                // Ensure origin and destination settlements are in the graph dictionary
                 if (!_graph.ContainsKey(route.Origin)) _graph[route.Origin] = new List<Edge>();
                 if (!_graph.ContainsKey(route.Destination)) _graph[route.Destination] = new List<Edge>();
 
-                double baseTimeHours = route.Distance / (ShipType.SailingShip.ToString().Equals("SailingShip") ? 2 * MPH_TO_KMH_FACTOR : 1.5 * MPH_TO_KMH_FACTOR);
+                // Calculate base time for the sea route. Using a default ship speed for graph building.
+                // The actual calculation for pathfinding will use the selected shipType.
+                // For graph building, we can use a representative speed, e.g., SailingShip's speed.
+                double representativeShipSpeedMph = 2; // SailingShip speed
+                double baseTimeHours = route.Distance / (representativeShipSpeedMph * MPH_TO_KMH_FACTOR);
 
+                // Add forward route X -> Y
                 _graph[route.Origin].Add(new Edge(route.Destination, baseTimeHours, route));
+                // Add reverse route Y -> X (assuming sea routes are also bidirectional)
+                _graph[route.Destination].Add(new Edge(route.Origin, baseTimeHours, route));
             }
 
             Console.WriteLine($"Graph built with {_graph.Count} settlements and {_graph.Sum(kv => kv.Value.Count)} routes.");
@@ -148,20 +160,60 @@ namespace YourFantasyWorldProject.Pathfinding
 
                 foreach (var edge in _graph[current])
                 {
+                    // Ensure the route type matches the preference
                     if (preference == RoutePreference.LandOnly && edge.Route is SeaRoute) continue;
                     if (preference == RoutePreference.SeaOnly && edge.Route is LandRoute) continue;
 
                     double timeCost = 0;
-                    double routeDistance = 0;
-                    List<string> biomesTraversed = new List<string>();
+                    // The 'edge.Route' here is the actual route object (LandRoute or SeaRoute)
+                    // We need to ensure the origin and destination of the 'edge.Route' match
+                    // the current segment being evaluated to correctly calculate time and cost.
+                    // This is crucial because a 'route' object might be added as a reverse edge.
+                    // When traversing from current to edge.Destination, we use the route whose Origin is 'current'
+                    // and Destination is 'edge.Destination'.
+                    // If the stored 'route' in the edge is the *reverse* route, we need to make sure the
+                    // calculations are based on the correct direction.
+                    // For simplicity, we can assume that edge.Route.Origin is always 'current' and edge.Route.Destination is 'edge.Destination'
+                    // for the purpose of time/cost calculation in Dijkstra's, as the graph has symmetric edges.
+                    // The critical part is that the JourneySegment correctly reflects the 'segmentStart' and 'segmentEnd'.
 
-                    if (edge.Route is LandRoute landRoute)
+                    // Determine the actual segment start and end for the purpose of cost calculation
+                    // This is important because 'edge.Route' might be the *reversed* route.
+                    Settlement actualSegmentOrigin;
+                    Settlement actualSegmentDestination;
+                    IRoute actualRouteToUse;
+
+                    // If the edge's route origin matches the current node, use it directly.
+                    if (edge.Route.Origin.Equals(current) && edge.Route.Destination.Equals(edge.Destination))
+                    {
+                        actualRouteToUse = edge.Route;
+                        actualSegmentOrigin = current;
+                        actualSegmentDestination = edge.Destination;
+                    }
+                    // Otherwise, it's the reverse of the stored route. Create a temporary "reversed" route
+                    // for accurate calculation if necessary, or just use the properties assuming symmetry.
+                    // For now, we can assume the cost/time calculation functions handle directionality
+                    // by just taking the route object. The distance and biome/ship info are route properties.
+                    else
+                    {
+                        // This case handles when edge.Route is the reverse (e.g., if we added B->A but stored A->B route object)
+                        // It's still valid to use the route object's properties for distance/biomes/type.
+                        actualRouteToUse = edge.Route;
+                        actualSegmentOrigin = current; // This edge is from 'current'
+                        actualSegmentDestination = edge.Destination; // To 'edge.Destination'
+                    }
+
+
+                    double routeDistance = 0; // Initialize for segment calculation
+                    List<string> biomesTraversed = new List<string>(); // Initialize for land routes
+
+                    if (actualRouteToUse is LandRoute landRoute)
                     {
                         routeDistance = landRoute.TotalDistance;
                         biomesTraversed = landRoute.Biomes;
                         timeCost = CalculateLandRouteTimeAndCost(landRoute, travelSpeed, mountType, numTravelers, out _);
                     }
-                    else if (edge.Route is SeaRoute seaRoute)
+                    else if (actualRouteToUse is SeaRoute seaRoute)
                     {
                         routeDistance = seaRoute.Distance;
                         timeCost = CalculateSeaRouteTimeAndCost(seaRoute, shipType, numTravelers, out _);
@@ -172,7 +224,7 @@ namespace YourFantasyWorldProject.Pathfinding
                     if (newDist < distances[edge.Destination])
                     {
                         distances[edge.Destination] = newDist;
-                        previous[edge.Destination] = edge.Route;
+                        previous[edge.Destination] = actualRouteToUse; // Store the route that led to this path
                         priorityQueue.Enqueue(edge.Destination, newDist);
                     }
                 }
@@ -189,14 +241,26 @@ namespace YourFantasyWorldProject.Pathfinding
                 return new JourneyResult(origin, destination, null, null);
             }
 
+            // Reconstruct path: start from destination and go backward using 'previous' dictionary
             Settlement pathCurrent = destination;
+            // Use a Stack to build the path in reverse and then pop to get it in correct order
+            Stack<JourneySegment> segmentsStack = new Stack<JourneySegment>();
+
             while (pathCurrent != null && !pathCurrent.Equals(origin))
             {
                 IRoute route = previous[pathCurrent];
-                if (route == null) break;
+                if (route == null) break; // Should not happen if pathFound is true
 
-                Settlement segmentStart = route.Origin;
-                Settlement segmentEnd = route.Destination;
+                // Determine the correct start and end for this segment
+                // Because graph edges are symmetrical, the route object we retrieved (previous[pathCurrent])
+                // might have its origin as the *true* origin of the route, and its destination as the *true* destination.
+                // However, in the context of traversing *backwards* from 'pathCurrent', the 'segmentStart'
+                // is the settlement that led to 'pathCurrent' via 'route'.
+                Settlement segmentEnd = pathCurrent;
+                Settlement segmentStart = route.Origin.Equals(pathCurrent) ? route.Destination : route.Origin;
+
+                // If segmentStart is null, it means the path reconstruction failed.
+                if (segmentStart == null) break;
 
                 double segmentTimeHours;
                 double segmentCost;
@@ -206,16 +270,16 @@ namespace YourFantasyWorldProject.Pathfinding
 
                 if (route is LandRoute landRouteSegment)
                 {
-                    segmentTimeHours = CalculateLandRouteTimeAndCost(landRouteSegment, travelSpeed, mountType, numTravelers, out segmentCost);
                     segmentDistance = landRouteSegment.TotalDistance;
                     biomes = landRouteSegment.Biomes;
+                    segmentTimeHours = CalculateLandRouteTimeAndCost(landRouteSegment, travelSpeed, mountType, numTravelers, out segmentCost);
                     totalRations += (segmentTimeHours / 24) * RATIONS_PER_PERSON_PER_DAY * numTravelers;
                     totalWaterLand += (segmentTimeHours / 24) * WATER_PER_PERSON_PER_DAY_LAND * numTravelers;
                 }
                 else if (route is SeaRoute seaRouteSegment)
                 {
-                    segmentTimeHours = CalculateSeaRouteTimeAndCost(seaRouteSegment, shipType, numTravelers, out segmentCost);
                     segmentDistance = seaRouteSegment.Distance;
+                    segmentTimeHours = CalculateSeaRouteTimeAndCost(seaRouteSegment, shipType, numTravelers, out segmentCost);
                     totalRations += (segmentTimeHours / 24) * RATIONS_PER_PERSON_PER_DAY * numTravelers;
                     totalWaterSea += (segmentTimeHours / 24) * WATER_PER_PERSON_PER_DAY_SEA * numTravelers;
                 }
@@ -226,8 +290,15 @@ namespace YourFantasyWorldProject.Pathfinding
                     segmentDistance = 0;
                 }
 
-                pathSegments.Insert(0, new JourneySegment(segmentStart, segmentEnd, segmentDistance, segmentTimeHours, segmentCost, route, biomes));
+                // Add the segment to the stack (it will be reversed later)
+                segmentsStack.Push(new JourneySegment(segmentStart, segmentEnd, segmentDistance, segmentTimeHours, segmentCost, route, biomes));
                 pathCurrent = segmentStart;
+            }
+
+            // Pop segments from stack to get them in correct order (Origin -> Destination)
+            while (segmentsStack.Count > 0)
+            {
+                pathSegments.Add(segmentsStack.Pop());
             }
 
             if (totalRations > 0) estimatedResourceCosts.Add(new ResourceCost("Rations", totalRations));

@@ -37,19 +37,13 @@ namespace YourFantasyWorldProject.Managers
 
         public DataManager(string basePath = "WorldData")
         {
+            // _basePath will point to the WorldData folder which will be extracted directly into the app's base directory
             _basePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, basePath);
             _landPath = Path.Combine(_basePath, "LandRoutes");
             _seaPath = Path.Combine(_basePath, "SeaRoutes");
             _customRoutesPath = Path.Combine(_basePath, "CustomRoutes");
             _customLandPath = Path.Combine(_customRoutesPath, "Land");
             _customSeaPath = Path.Combine(_customRoutesPath, "Sea");
-
-            // No need to create directories here initially; EnsureInitialDataPresent will handle it.
-            // However, ensuring the base CustomRoutes directory exists is good practice,
-            // even if no routes are restored yet.
-            Directory.CreateDirectory(_customRoutesPath);
-            Directory.CreateDirectory(_customLandPath);
-            Directory.CreateDirectory(_customSeaPath);
 
             // Call this at DataManager instantiation to ensure data is present/updated
             EnsureInitialDataPresent();
@@ -75,6 +69,10 @@ namespace YourFantasyWorldProject.Managers
             Dictionary<string, List<string>> backedUpCustomLandRoutes = new Dictionary<string, List<string>>();
             Dictionary<string, List<string>> backedUpCustomSeaRoutes = new Dictionary<string, List<string>>();
             bool customDataBackedUp = false;
+
+            // Ensure custom directories exist before attempting to get files from them for backup
+            Directory.CreateDirectory(_customLandPath);
+            Directory.CreateDirectory(_customSeaPath);
 
             if (Directory.Exists(_customLandPath))
             {
@@ -112,19 +110,18 @@ namespace YourFantasyWorldProject.Managers
                 Console.WriteLine($"Downloaded WorldData.zip to {localZipPath}.");
                 downloadedSuccessfully = true;
 
-                // Delete existing _basePath (WorldData) to ensure a clean slate for extraction,
-                // this will remove old default data but NOT the custom routes backup.
+                // Delete existing _basePath (WorldData folder) to ensure a clean slate for extraction.
+                // This will remove old default data.
                 if (Directory.Exists(_basePath))
                 {
+                    Console.WriteLine($"Cleaning existing {_basePath} directory before extraction.");
                     Directory.Delete(_basePath, true);
-                    Console.WriteLine($"Cleaned existing {_basePath} directory.");
                 }
-                Directory.CreateDirectory(_basePath); // Recreate the main WorldData folder
 
-                // Extract the zip file to _basePath
-                // The 'true' argument means overwrite existing files if any somehow remain.
-                ZipFile.ExtractToDirectory(localZipPath, _basePath, true);
-                Console.WriteLine($"Extracted WorldData.zip to {_basePath}.");
+                // Extract the zip file directly to the application's base directory.
+                // This assumes WorldData folder is at the root of the zip file.
+                ZipFile.ExtractToDirectory(localZipPath, AppDomain.CurrentDomain.BaseDirectory, true);
+                Console.WriteLine($"Extracted WorldData.zip to {AppDomain.CurrentDomain.BaseDirectory}.");
 
                 // Delete the downloaded zip file after extraction
                 File.Delete(localZipPath);
@@ -133,20 +130,22 @@ namespace YourFantasyWorldProject.Managers
             {
                 Console.WriteLine($"Failed to download or unpack WorldData.zip from GitHub: {ex.Message}");
                 downloadedSuccessfully = false; // Mark failure
-                // If download fails, ensure _basePath exists for the app to function with whatever local data it has.
+                // If download fails, ensure _basePath (WorldData) and its subdirectories exist
+                // for the app to function with whatever local data it might have.
                 if (!Directory.Exists(_basePath))
                 {
                     Directory.CreateDirectory(_basePath);
-                    Directory.CreateDirectory(_landPath);
-                    Directory.CreateDirectory(_seaPath);
                 }
+                // Ensure default data subdirectories exist even if zip failed
+                Directory.CreateDirectory(_landPath);
+                Directory.CreateDirectory(_seaPath);
             }
 
             // Step 3: Restore custom routes
             if (customDataBackedUp)
             {
                 Console.WriteLine("Restoring custom route data...");
-                // Ensure custom directories exist before restoring
+                // Ensure custom directories exist before restoring (might have been deleted by clean step)
                 Directory.CreateDirectory(_customLandPath);
                 Directory.CreateDirectory(_customSeaPath);
 
@@ -163,6 +162,9 @@ namespace YourFantasyWorldProject.Managers
             else
             {
                 Console.WriteLine("No custom data to restore.");
+                // Ensure custom directories are created even if no data was backed up
+                Directory.CreateDirectory(_customLandPath);
+                Directory.CreateDirectory(_customSeaPath);
             }
 
             Console.WriteLine("WorldData check complete.");
@@ -237,8 +239,19 @@ namespace YourFantasyWorldProject.Managers
                     {
                         string[] originParts = trimmedLine.Split('\t');
                         string originName = originParts[0].Trim();
-                        string originRegion = originParts.Length > 1 ? originParts[1].Trim() : Path.GetFileNameWithoutExtension(filePath);
-                        currentOrigin = GetSettlementByNameAndRegion(originName, originRegion);
+                        // Infer region from filename if not explicitly provided in the line or if provided region mismatches
+                        string regionFromFileName = Path.GetFileNameWithoutExtension(filePath); // Filename is already uppercase
+                        string effectiveRegion = regionFromFileName; // Default to filename region
+
+                        if (originParts.Length > 1) // If region is provided in the line itself
+                        {
+                            string providedRegion = originParts[1].Trim();
+                            if (!string.Equals(providedRegion, regionFromFileName, StringComparison.OrdinalIgnoreCase))
+                            {
+                                Console.WriteLine($"Warning: Line '{line}' in file '{Path.GetFileName(filePath)}' has region '{providedRegion}' which differs from filename region '{regionFromFileName}'. Using '{regionFromFileName}'.");
+                            }
+                        }
+                        currentOrigin = GetSettlementByNameAndRegion(originName, effectiveRegion);
                     }
                     else // This is a route line from the currentOrigin
                     {
@@ -369,47 +382,29 @@ namespace YourFantasyWorldProject.Managers
             // Check if the origin settlement already exists as a header in the file
             // Compare using the invariant uppercase name for lookup
             string originHeaderContent = $"{route.Origin.Name}"; // Start with just the name
-            if (!string.IsNullOrWhiteSpace(route.Origin.Region))
-            {
-                originHeaderContent += $"\t{route.Origin.Region}"; // Add region if it exists
-            }
-
+            // No longer adding region to origin header in file, as it's inferred from filename
+            // if (!string.IsNullOrWhiteSpace(route.Origin.Region))
+            // {
+            //     originHeaderContent += $"\t{route.Origin.Region}";
+            // }
 
             int originIndex = -1;
             for (int i = 0; i < fileContent.Count; i++)
             {
-                // To find an existing header, we need to compare its content using invariant casing.
-                // Headers can be "NAME" or "NAME\tREGION"
                 string fileLineTrimmed = fileContent[i].Trim();
                 // An origin header does NOT start with a tab
                 if (!fileLineTrimmed.StartsWith("\t") && !string.IsNullOrWhiteSpace(fileLineTrimmed))
                 {
-                    string[] parts = fileLineTrimmed.Split('\t');
+                    string[] parts = fileLineTrimmed.Split('\t', StringSplitOptions.RemoveEmptyEntries);
                     // Check if name matches (case-insensitive)
                     if (parts.Length >= 1 && parts[0].Trim().ToUpperInvariant().Equals(route.Origin.Name.ToUpperInvariant()))
                     {
-                        // If origin has a region, make sure the file line also has that region and it matches
-                        if (!string.IsNullOrWhiteSpace(route.Origin.Region))
-                        {
-                            if (parts.Length == 2 && parts[1].Trim().ToUpperInvariant().Equals(route.Origin.Region.ToUpperInvariant()))
-                            {
-                                originIndex = i;
-                                originFound = true;
-                                break;
-                            }
-                        }
-                        else // Origin doesn't have a specific region (like "TINVERKE" alone)
-                        {
-                            // If the file line is just the name (no tab or subsequent part), it's a match.
-                            // Or if the file line has a region, but our origin doesn't, this might still be considered a match if the region is the "default" for the file.
-                            // For simplicity, let's say "NAME" matches if origin.Region is empty, or "NAME\tREGION" matches if origin.Region is present and matches.
-                            if (parts.Length == 1) // Only name present in file header
-                            {
-                                originIndex = i;
-                                originFound = true;
-                                break;
-                            }
-                        }
+                        // The origin header in the file should now *only* contain the name if we follow the new format
+                        // Or at most, the name and *its* region, but we are moving away from that.
+                        // For finding an existing header, just compare the name part.
+                        originIndex = i;
+                        originFound = true;
+                        break;
                     }
                 }
             }
@@ -417,12 +412,8 @@ namespace YourFantasyWorldProject.Managers
 
             if (!originFound)
             {
-                // If origin not found, add its header with original casing.
+                // If origin not found, add its header with original casing, just the name.
                 string newOriginLine = route.Origin.Name;
-                if (!string.IsNullOrWhiteSpace(route.Origin.Region))
-                {
-                    newOriginLine += $"\t{route.Origin.Region}";
-                }
                 fileContent.Add(newOriginLine);
                 originIndex = fileContent.Count - 1; // It's now the last line
             }
@@ -571,23 +562,35 @@ namespace YourFantasyWorldProject.Managers
                     if (!trimmedLine.StartsWith("\t")) // This is an origin settlement header
                     {
                         string[] originParts = trimmedLine.Split('\t', StringSplitOptions.RemoveEmptyEntries);
-                        if (originParts.Length == 0 || originParts.Length > 2)
+                        if (originParts.Length == 0 || originParts.Length > 2) // Max 2 parts (Name, Region)
                         {
                             issuesFound.Add($"Line {lineNumber + 1}: Malformed origin header '{originalLine}'. Skipping.");
                             lineRepaired = true;
                             continue;
                         }
                         string originName = textInfo.ToTitleCase(originParts[0].Trim().ToLower()); // Convert to Title Case for storing
-                        string originRegion = originParts.Length == 2 ? textInfo.ToTitleCase(originParts[1].Trim().ToLower()) : Path.GetFileNameWithoutExtension(filePath); // Convert to Title Case
+
+                        // Always infer region from filename for validation/repair consistency
+                        string regionFromFileName = Path.GetFileNameWithoutExtension(filePath);
+                        string originRegion = regionFromFileName; // Use filename region
+
+                        // If the original line had a region and it doesn't match the filename, log a warning
+                        if (originParts.Length == 2 && !string.Equals(originParts[1].Trim(), regionFromFileName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            string providedRegion = originParts[1].Trim();
+                            Console.WriteLine($"Warning: Line '{originalLine}' in file '{Path.GetFileName(filePath)}' has region '{providedRegion}' which differs from filename region '{regionFromFileName}'. Using '{regionFromFileName}'.");
+                            issuesFound.Add($"Line {lineNumber + 1}: Region '{providedRegion}' in origin header differs from filename region '{regionFromFileName}'. Auto-correcting to filename region.");
+                            lineRepaired = true;
+                        }
+
                         currentOrigin = new Settlement(originName, originRegion);
 
-                        // Reconstruct header with original (now title-cased) input
+                        // Reconstruct header with just the origin name for future compatibility
+                        // This makes the file format cleaner.
                         string repairedOriginLine = originName;
-                        if (originParts.Length == 2)
-                        {
-                            repairedOriginLine += $"\t{textInfo.ToTitleCase(originParts[1].Trim().ToLower())}";
-                        }
-                        repairedLines.Add(repairedOriginLine);
+                        repairedLines.Add(repairedOriginLine); // Now only name is stored in header
+                        if (lineRepaired || !originalLine.Equals(repairedOriginLine)) fileChanged = true;
+
                     }
                     else // This is a route definition line (starts with tab)
                     {
