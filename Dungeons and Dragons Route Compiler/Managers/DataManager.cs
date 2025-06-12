@@ -66,15 +66,17 @@ namespace YourFantasyWorldProject.Managers
                 try
                 {
                     string zipFileName = "WorldData.zip";
-                    string zipFileUrl = GitHubBaseUrl + zipFileName;
-                    string zipFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, zipFileName);
+                    // Use the new helper method to get the project root directory
+                    string targetDirectory = GetProjectRootDirectory();
 
-                    Console.WriteLine($"Downloading {zipFileName} from {zipFileUrl}...");
-                    byte[] fileBytes = await _httpClient.GetByteArrayAsync(zipFileUrl);
+                    string zipFilePath = Path.Combine(targetDirectory, zipFileName);
+
+                    Console.WriteLine($"Downloading {zipFileName} from {GitHubBaseUrl + zipFileName}...");
+                    byte[] fileBytes = await _httpClient.GetByteArrayAsync(GitHubBaseUrl + zipFileName);
                     await File.WriteAllBytesAsync(zipFilePath, fileBytes);
                     Console.WriteLine("Download complete. Extracting...");
 
-                    // Ensure the base path exists before extraction
+                    // Ensure the base path for extraction exists
                     Directory.CreateDirectory(_basePath);
 
                     ZipFile.ExtractToDirectory(zipFilePath, _basePath, true); // true for overwrite
@@ -289,12 +291,12 @@ namespace YourFantasyWorldProject.Managers
             string routeSpecificPath = "";
             if (routeType == RouteType.Land)
             {
-                // MODIFIED: Use ToTitleCaseExceptOf for filename
+                // Use ToTitleCaseExceptOf for filename
                 routeSpecificPath = Path.Combine(basePath, "Land", $"{ToTitleCaseExceptOf(route.Origin.Region)}.txt");
             }
             else if (routeType == RouteType.Sea)
             {
-                // MODIFIED: Use ToTitleCaseExceptOf for filename
+                // Use ToTitleCaseExceptOf for filename
                 routeSpecificPath = Path.Combine(basePath, "Sea", $"{ToTitleCaseExceptOf(route.Origin.Region)}.txt");
             }
 
@@ -450,8 +452,13 @@ namespace YourFantasyWorldProject.Managers
         /// </summary>
         private void CreateWorldDataZip()
         {
-            string zipFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WorldData.zip");
-            string sourceDirectory = _basePath;
+            string zipFileName = "WorldData.zip";
+            // Use the new helper method to get the project root directory
+            string projectRootDirectory = GetProjectRootDirectory();
+
+            string zipFilePath = Path.Combine(projectRootDirectory, zipFileName);
+
+            string sourceDirectory = _basePath; // This is WorldData/
 
             try
             {
@@ -477,6 +484,42 @@ namespace YourFantasyWorldProject.Managers
             catch (Exception ex)
             {
                 Console.WriteLine($"Error creating WorldData.zip: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Attempts to find the project's root directory by walking up from the current base directory
+        /// and looking for a .csproj file.
+        /// </summary>
+        /// <returns>The full path to the project root directory, or AppDomain.CurrentDomain.BaseDirectory if not found.</returns>
+        private string GetProjectRootDirectory()
+        {
+            string currentDirectory = AppDomain.CurrentDomain.BaseDirectory;
+            DirectoryInfo directory = new DirectoryInfo(currentDirectory);
+
+            Console.WriteLine($"Attempting to find project root from: {currentDirectory}");
+
+            // Walk up the directory tree to find the .csproj file
+            // Limit the search to prevent infinite loops in unexpected directory structures
+            int maxAttempts = 10; // Search up to 10 parent directories
+            int currentAttempt = 0;
+
+            while (directory != null && !directory.GetFiles("*.csproj").Any() && currentAttempt < maxAttempts)
+            {
+                directory = directory.Parent;
+                currentAttempt++;
+            }
+
+            if (directory != null && directory.GetFiles("*.csproj").Any())
+            {
+                Console.WriteLine($"Determined project root directory: {directory.FullName}");
+                return directory.FullName;
+            }
+            else
+            {
+                Console.WriteLine("Could not determine the project root directory by finding .csproj. Falling back to application base directory.");
+                Console.WriteLine("Please ensure the .csproj file is in a standard location relative to the executable.");
+                return AppDomain.CurrentDomain.BaseDirectory;
             }
         }
     }
