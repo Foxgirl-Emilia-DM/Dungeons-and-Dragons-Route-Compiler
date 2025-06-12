@@ -98,25 +98,32 @@ namespace YourFantasyWorldProject.Managers
         /// </summary>
         public void AddRoute()
         {
-            Console.WriteLine("\n--- Add New Route ---");
-            Console.WriteLine("Select Route Type:");
-            Console.WriteLine("1. Land Route");
-            Console.WriteLine("2. Sea Route");
-            string choice = ConsoleInput.GetStringInput("Enter your choice: ");
-
-            switch (choice)
+            bool isDone = false;
+            do
             {
-                case "1":
-                    _pathfinder.CreateDmLandRoute(); // Call the updated method
-                    break;
-                case "2":
-                    _pathfinder.CreateDmSeaRoute(); // Call the updated method
-                    break;
-                default:
-                    Console.WriteLine("Invalid route type choice.");
-                    break;
-            }
-            LoadAllRoutes(); // Reload all routes to include the newly added one
+                Console.WriteLine("\n--- Add New Route ---");
+                Console.WriteLine("Select Route Type:");
+                Console.WriteLine("1. Land Route");
+                Console.WriteLine("2. Sea Route");
+                Console.WriteLine("3. Exit");
+                string choice = ConsoleInput.GetStringInput("Enter your choice: ");
+
+                switch (choice)
+                {
+                    case "1":
+                        _pathfinder.CreateDmLandRoute(); // Call the updated method
+                        break;
+                    case "2":
+                        _pathfinder.CreateDmSeaRoute(); // Call the updated method
+                        break;
+                    case "3":
+                        break;
+                    default:
+                        Console.WriteLine("Invalid route type choice.");
+                        break;
+                }
+                LoadAllRoutes(); // Reload all routes to include the newly added one
+            } while (!isDone);
         }
 
         /// <summary>
